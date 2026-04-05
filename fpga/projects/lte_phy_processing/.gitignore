@@ -2,7 +2,7 @@
 /vivado/.Xil
 /vivado/lte_phy_processing.*/**
 /vivado/lte_phy_processing.xpr
-/vivado/lte_phy_processing.gen
+/vivado/lte_phy_processing.gen/**
 /vivado/*.tmp
 /vivado/vivado_*.backup.jou
 /vivado/vivado_*.backup.log
@@ -13,3 +13,4 @@
 /vivado/bd/*
 /devl/lte_phy_sync/input_signal.hex
 /devl/lte_phy_sync/input_awgn.hex
+/ip_pkg/**
