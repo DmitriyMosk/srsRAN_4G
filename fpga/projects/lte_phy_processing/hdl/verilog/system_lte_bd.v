@@ -1,3 +1,7 @@
+`include "lte_hw_params.vh"
+
+// block design wrapper
+
 module system_lte_bd #(
     // размерность данных
     parameter DATA_W            = 16,
@@ -22,14 +26,14 @@ module system_lte_bd #(
     output wire signed [DATA_W - 1: 0]   o_data_q1,
     output wire                          o_data_valid_1,
 
-    output wire [2:0]                    o_dbg_pss_idx,
+    output wire [$clog2(`LTE_PSS_COUNT)-1:0] o_dbg_pss_idx,
     output wire [31:0]                   o_dbg_shift,
 
     output wire  [33:0]                  o_dbg_mag_pss0,
     output wire  [33:0]                  o_dbg_mag_pss1,
     output wire  [33:0]                  o_dbg_mag_pss2
 );
-    system_lte #(
+    (* keep_hierarchy = "yes", dont_touch = "yes" *) system_lte #(
         .DATA_W(DATA_W), 
         .LTE_CORR_FS(LTE_CORR_FS), 
         .LTE_CORR_LANES(LTE_CORR_LANES),

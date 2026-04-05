@@ -19,6 +19,7 @@
     но мне лень...
 */ 
 
+`timescale 1ns/1ps
 `include "lte_phy_math.vh"
 
 module math_complex_corr #(

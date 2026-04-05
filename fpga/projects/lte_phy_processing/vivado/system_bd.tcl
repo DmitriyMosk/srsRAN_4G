@@ -5,11 +5,12 @@
 # package custom IP when DO_PACKAGE == 1
 # -----------------------------------------------------------------------------
 
-# 1 - запаковываем в ip
-# 0 - не запаковываем в ip
 set DO_PACKAGE 0
 
-# это то, с чем я работаю
+if {![info exists RUN_TOP_SYNTH]} {
+    set RUN_TOP_SYNTH 0
+}
+
 set ZEDBOARD_ZYNQ "xc7z020clg484-1"
 
 set tcl_dir   [file dirname [file normalize [info script]]]
@@ -34,6 +35,7 @@ puts "INFO: LTE_PHY_FFT  = $LTE_PHY_FFT"
 set IP_PKG_ROOT [file normalize [file join $repo_root "ip_pkg"]]
 set IP_NAME     "lte_phy_processing"
 set IP_PKG_DIR  [file join $IP_PKG_ROOT $IP_NAME]
+set IP_PKG_SRC_PATH [file join $IP_PKG_DIR "src"]
 
 # -----------------------------------------------------------------------------
 # helper procs
@@ -77,8 +79,6 @@ proc purge_stale_coe_refs {repo_root} {
         }
 
         set fn_l [string tolower $fn]
-
-        # Оставляем только coe внутри repo_root/coe
         if {[string first "${good_dir}/" $fn_l] != 0} {
             puts "INFO: removing stale COE reference $fn"
             catch {remove_files $f}
@@ -126,14 +126,29 @@ proc maybe_fix_coe_path_for_ip {ip_name repo_root} {
 
         puts "INFO: setting $ip_name CONFIG.Coe_File = $coe_path"
         set_property -dict [list CONFIG.Coe_File $coe_path] $ip_obj
-
         catch {set_property -dict [list CONFIG.Load_Init_File true] $ip_obj}
     }
 }
 
-proc import_and_build_ip_list {srcset ip_dir ip_names jobs repo_root} {
+proc add_generated_ip_synth_sources {srcset project_dir ip_name} {
+    set gen_ip_dir [file join $project_dir "lte_phy_processing.gen" "sources_1" "ip" $ip_name]
+    set shared_vhdl [list \
+        [file join $gen_ip_dir "misc" "blk_mem_gen_v8_4.vhd"] \
+        [file join $gen_ip_dir "hdl"  "blk_mem_gen_v8_4_vhsyn_rfs.vhd"] \
+    ]
+
+    foreach f $shared_vhdl {
+        if {[file exists $f]} {
+            set f_obj [get_files -quiet [file normalize $f]]
+            if {[llength $f_obj] > 0} {
+                set_property library blk_mem_gen_v8_4_7 $f_obj
+            }
+        }
+    }
+}
+
+proc import_and_build_ip_list {srcset ip_dir ip_names repo_root project_dir} {
     set imported_ip_files [list]
-    set ip_runs           [list]
 
     foreach ip_name $ip_names {
         set xci_path [file join $ip_dir $ip_name]
@@ -141,7 +156,6 @@ proc import_and_build_ip_list {srcset ip_dir ip_names jobs repo_root} {
 
         puts "INFO: IP import $xci_path"
         set ip_xci_list [import_ip -quiet -srcset $srcset $xci_path]
-
         if {[llength $ip_xci_list] == 0} {
             error "ERROR: import_ip returned empty list for: $xci_path"
         }
@@ -150,40 +164,50 @@ proc import_and_build_ip_list {srcset ip_dir ip_names jobs repo_root} {
         lappend imported_ip_files $ip_xci
 
         set ip_base [file rootname [file tail $xci_path]]
-
-        # Исправить путь к COE, если это один из PSS ROM IP
         maybe_fix_coe_path_for_ip $ip_base $repo_root
 
-        # Перегенерировать target-файлы уже после фикса путей
         generate_target all -force $ip_xci
-
-        # Синхронизировать collateral user files
         catch {export_ip_user_files -of_objects $ip_xci -no_script -sync -force}
-
-        # Создать OOC run для IP
-        set ip_run [create_ip_run -force $ip_xci]
-        if {$ip_run eq ""} {
-            error "ERROR: create_ip_run failed for: $xci_path"
-        }
-
-        lappend ip_runs $ip_run
-    }
-
-    if {[llength $ip_runs] > 0} {
-        puts "INFO: IP launching [llength $ip_runs] IP runs with -jobs $jobs"
-        launch_runs -jobs $jobs {*}$ip_runs
-        wait_on_runs {*}$ip_runs
-        puts "INFO: IP all IP runs completed"
+        add_generated_ip_synth_sources $srcset $project_dir $ip_base
     }
 
     return $imported_ip_files
+}
+
+proc run_top_synth_reports {srcset top_name reports_dir part_name} {
+    puts "INFO: starting synthesis for top=$top_name"
+
+    set_property top $top_name [get_filesets $srcset]
+    update_compile_order -fileset $srcset
+
+    reset_run synth_1
+    launch_runs synth_1 -jobs 4
+    wait_on_run synth_1
+
+    set synth_run [get_runs synth_1]
+    set synth_status [get_property STATUS $synth_run]
+    if {![string match "*Complete*" $synth_status]} {
+        error "ERROR: synthesis run failed for top=$top_name with status '$synth_status'"
+    }
+
+    open_run synth_1
+
+    report_utilization               -file [file join $reports_dir "${top_name}_utilization.rpt"]
+    report_utilization -hierarchical -file [file join $reports_dir "${top_name}_utilization_hier.rpt"]
+    report_timing_summary            -file [file join $reports_dir "${top_name}_timing_summary.rpt"]
+    write_checkpoint -force [file join $reports_dir "${top_name}_synth.dcp"]
+
+    close_design
 }
 
 # -----------------------------------------------------------------------------
 # project creation
 # -----------------------------------------------------------------------------
 
-create_project lte_phy_processing "$repo_root/vivado" -force -part $ZEDBOARD_ZYNQ
+set PROJECT_DIR [file join $repo_root "vivado"]
+file mkdir [file dirname $PROJECT_DIR]
+
+create_project lte_phy_processing $PROJECT_DIR -force -part $ZEDBOARD_ZYNQ
 set_property target_simulator XSim [current_project]
 
 set IP_PATH       [file join $repo_root "ip"]
@@ -192,7 +216,6 @@ set HDL_SV_PATH   [file join $repo_root "hdl/systemverilog"]
 set HDL_INC_PATH  [file join $repo_root "hdl/include"]
 set MATH_INC_PATH [file join $LTE_PHY_MATH "hdl/include"]
 
-# sanity checks
 require_file_exists [file join $repo_root "coe" "pss_0_td_128.coe"]
 require_file_exists [file join $repo_root "coe" "pss_0_td_256.coe"]
 require_file_exists [file join $repo_root "coe" "pss_1_td_128.coe"]
@@ -202,6 +225,8 @@ require_file_exists [file join $repo_root "coe" "pss_2_td_256.coe"]
 
 require_file_exists [file join $HDL_INC_PATH "lte_hw_params.vh"]
 require_file_exists [file join $HDL_SV_PATH  "lte_phy_sync.sv"]
+require_file_exists [file join $HDL_SV_PATH  "lte_phy_pss_corr.sv"]
+require_file_exists [file join $HDL_SV_PATH  "mem_ring_buffer.sv"]
 require_file_exists [file join $HDL_SV_PATH  "system_lte.sv"]
 require_file_exists [file join $HDL_V_PATH   "system_lte_bd.v"]
 
@@ -216,11 +241,10 @@ set inc_dirs [list \
     $MATH_INC_PATH \
 ]
 
-# ВАЖНО:
-# COE здесь специально НЕ добавляем сразу.
-# Сначала импортируем XCI, потом чистим мусорные COE refs, потом возвращаем только чистые.
 add_files -fileset sources_1 -norecurse [list                               \
     [file join $HDL_INC_PATH "lte_hw_params.vh"]                            \
+    [file join $HDL_SV_PATH "mem_ring_buffer.sv"]                           \
+    [file join $HDL_SV_PATH "lte_phy_pss_corr.sv"]                          \
     [file join $HDL_SV_PATH "lte_phy_sync.sv"]                              \
     [file join $HDL_SV_PATH "system_lte.sv"]                                \
     [file join $HDL_V_PATH  "system_lte_bd.v"]                              \
@@ -236,23 +260,26 @@ mark_header_as_global_include [file join $HDL_INC_PATH "lte_hw_params.vh"]
 mark_header_as_global_include [file join $LTE_PHY_MATH "hdl" "include" "lte_phy_math.vh"]
 
 # -----------------------------------------------------------------------------
-# import prebuilt XCI and rebuild them
+# import prebuilt XCI and regenerate output products
 # -----------------------------------------------------------------------------
 
-set IP_BUILD_JOBS 8
-
-set PREBUILT_IP_XCI [list \
-    "mem_gen_256k32.xci"       \
-    "mem_gen_512k32.xci"       \
-    "pss_0_rom_td_128sps.xci"  \
-    "pss_0_rom_td_256sps.xci"  \
-    "pss_1_rom_td_128sps.xci"  \
-    "pss_1_rom_td_256sps.xci"  \
-    "pss_2_rom_td_128sps.xci"  \
-    "pss_2_rom_td_256sps.xci"  \
+set MEM_IP_XCI [list \
+    "mem_gen_256k32.xci" \
+    "mem_gen_512k32.xci" \
 ]
 
-set imported_ip_files [import_and_build_ip_list sources_1 $IP_PATH $PREBUILT_IP_XCI $IP_BUILD_JOBS $repo_root]
+set PSS_IP_XCI [list \
+    [file join "pss_0_rom_td_128sps" "pss_0_rom_td_128sps.xci"] \
+    [file join "pss_0_rom_td_256sps" "pss_0_rom_td_256sps.xci"] \
+    [file join "pss_1_rom_td_128sps" "pss_1_rom_td_128sps.xci"] \
+    [file join "pss_1_rom_td_256sps" "pss_1_rom_td_256sps.xci"] \
+    [file join "pss_2_rom_td_128sps" "pss_2_rom_td_128sps.xci"] \
+    [file join "pss_2_rom_td_256sps" "pss_2_rom_td_256sps.xci"] \
+]
+
+set imported_ip_files [list]
+set imported_ip_files [concat $imported_ip_files [import_and_build_ip_list sources_1 $IP_PATH $MEM_IP_XCI $repo_root $PROJECT_DIR]]
+set imported_ip_files [concat $imported_ip_files [import_and_build_ip_list sources_1 $IP_PKG_SRC_PATH $PSS_IP_XCI $repo_root $PROJECT_DIR]]
 
 puts "INFO: COE refs before purge"
 report_project_coe_refs
@@ -272,12 +299,27 @@ update_compile_order -fileset sources_1
 
 puts {INFO: [RTL] sources_1 filled OK}
 
+if {$RUN_TOP_SYNTH} {
+    set REPORTS_DIR [file join $repo_root "vivado" "reports"]
+    file mkdir $REPORTS_DIR
+
+    run_top_synth_reports sources_1 lte_phy_pss_corr $REPORTS_DIR $ZEDBOARD_ZYNQ
+    run_top_synth_reports sources_1 system_lte_bd $REPORTS_DIR $ZEDBOARD_ZYNQ
+    run_top_synth_reports sources_1 system_lte    $REPORTS_DIR $ZEDBOARD_ZYNQ
+
+    set_property top system_lte_bd [get_filesets sources_1]
+    update_compile_order -fileset sources_1
+
+    puts "INFO: synthesis reports are in $REPORTS_DIR"
+}
+
 # -----------------------------------------------------------------------------
 # simulation filesets (only when not packaging)
 # -----------------------------------------------------------------------------
 
 set TB_EBMG  [file join $repo_root "devl" "example_blk_mem_gen_0"]
 set TB_LPPMT [file join $repo_root "devl" "lte_phy_pss_mem_test"]
+set TB_LPPC  [file join $repo_root "devl" "lte_phy_pss_corr"]
 set TB_LPS   [file join $repo_root "devl" "lte_phy_sync"]
 
 if {!$DO_PACKAGE} {
@@ -286,9 +328,6 @@ if {!$DO_PACKAGE} {
         create_fileset -simset sim_lte_system
     }
 
-    # -------------------------------------------------------------------------
-    # example_blk_mem_gen_0
-    # -------------------------------------------------------------------------
     if {[string equal [get_filesets -quiet example_blk_mem_gen_0] ""]} {
         set s_set example_blk_mem_gen_0
         create_fileset -simset $s_set
@@ -303,9 +342,6 @@ if {!$DO_PACKAGE} {
         update_compile_order -fileset $s_set
     }
 
-    # -------------------------------------------------------------------------
-    # lte_phy_pss_mem_test
-    # -------------------------------------------------------------------------
     if {[string equal [get_filesets -quiet lte_phy_pss_mem_test] ""]} {
         set s_set lte_phy_pss_mem_test
         create_fileset -simset $s_set
@@ -322,9 +358,6 @@ if {!$DO_PACKAGE} {
         update_compile_order -fileset $s_set
     }
 
-    # -------------------------------------------------------------------------
-    # lte_phy_sync
-    # -------------------------------------------------------------------------
     if {[string equal [get_filesets -quiet lte_phy_sync] ""]} {
         set s_set lte_phy_sync
         create_fileset -simset $s_set
@@ -339,6 +372,21 @@ if {!$DO_PACKAGE} {
         set_property xsim.view    [file join $TB_LPS "testbench_behav.wcfg"] [get_filesets $s_set]
         set_property include_dirs $inc_dirs                                  [get_filesets $s_set]
         set_property top testbench                                           [get_filesets $s_set]
+
+        update_compile_order -fileset $s_set
+    }
+
+    if {[string equal [get_filesets -quiet lte_phy_pss_corr] ""]} {
+        set s_set lte_phy_pss_corr
+        create_fileset -simset $s_set
+
+        add_files -fileset $s_set -norecurse [list \
+            [file join $TB_LPPC "testbench.sv"]          \
+            [file join $TB_LPS  "input_signal.hex"]      \
+        ]
+
+        set_property include_dirs $inc_dirs             [get_filesets $s_set]
+        set_property top tb_lte_phy_pss_corr            [get_filesets $s_set]
 
         update_compile_order -fileset $s_set
     }

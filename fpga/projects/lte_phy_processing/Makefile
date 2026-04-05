@@ -21,6 +21,16 @@ project:
 	@cd $(REPO_ROOT)/devl/lte_phy_sync && tar -xzf ./compressed/input_files.tar.gz -C ./
 	@cd $(REPO_ROOT)/vivado/ && "$(VIVADO)" -mode batch -notrace -source "system_bd.tcl" && cd ..
 
+synth:
+	@echo "Create project and run synthesis/resource reports"
+	@cd $(REPO_ROOT)/devl/lte_phy_sync && tar -xzf ./compressed/input_files.tar.gz -C ./
+	@cd $(REPO_ROOT)/vivado/ && "$(VIVADO)" -mode batch -notrace -source "synth_resources.tcl" && cd ..
+
+sim_pss_corr:
+	@echo "Create project and run lte_phy_pss_corr simulation"
+	@cd $(REPO_ROOT)/devl/lte_phy_sync && tar -xzf ./compressed/input_files.tar.gz -C ./
+	@cd $(REPO_ROOT)/vivado/ && "$(VIVADO)" -mode batch -notrace -source "sim_pss_corr.tcl" && cd ..
+
 clean: 
 	@echo "Clean project"
 	rm -rf $(REPO_ROOT)vivado/lte_phy_processing.*
@@ -42,4 +52,6 @@ finaly:
 
 help:
 	@echo "make project"
+	@echo "make synth"
+	@echo "make sim_pss_corr"
 	

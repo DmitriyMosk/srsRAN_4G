@@ -29,14 +29,13 @@ module testbench;
     logic signed [`HW_ADC_WIDTH-1:0] i_data_q;
     logic                            i_sample_ce;
 
-    // corr engine
-    logic                            corr_busy;
-    logic                            corr_overrun;
-    logic                            corr_valid;
-    logic [31:0]                     corr_shift;
-    logic [33:0]                     mag_pss0;
-    logic [33:0]                     mag_pss1;
-    logic [33:0]                     mag_pss2;
+    logic [$clog2(`LTE_PSS_COUNT)-1:0]  o_pss_idx;
+    logic                               o_pss_valid;
+    logic [31:0]                        o_shift;
+    logic                               o_busy;
+    logic [33:0]                        o_dbg_mag_pss0;
+    logic [33:0]                        o_dbg_mag_pss1;
+    logic [33:0]                        o_dbg_mag_pss2;
 
     // peak reducer
     logic                            pss_valid;
@@ -53,16 +52,16 @@ module testbench;
     ) u_corr (
         .i_clk       (clk),
         .i_rst       (rst),
-        .i_sample_ce (i_sample_ce),
-        .i_data_i    (i_data_i),
-        .i_data_q    (i_data_q),
-        .o_busy      (corr_busy),
-        .o_overrun   (corr_overrun),
-        .o_corr_valid(corr_valid),
-        .o_corr_shift(corr_shift),
-        .o_mag_pss0  (mag_pss0),
-        .o_mag_pss1  (mag_pss1),
-        .o_mag_pss2  (mag_pss2)
+        .i_data_i1   (i_data_i1),
+        .i_data_q1   (i_data_q1),
+        .i_valid     (i_valid),
+        .o_pss_idx   (o_pss_idx),
+        .o_pss_valid (o_pss_valid),
+        .o_shift     (o_shift),
+        .o_busy      (o_busy),
+        .o_dbg_mag_pss0(o_dbg_mag_pss0),
+        .o_dbg_mag_pss1(o_dbg_mag_pss1),
+        .o_dbg_mag_pss2(o_dbg_mag_pss2)
     );
 
     lte_pss_period_peak_reducer #(
@@ -259,6 +258,22 @@ module testbench;
     longint busy_samples_total;
     int     busy_event_count;
 
+    initial begin
+        file = $fopen("pss_log.txt", "w");
+    end
+
+    always @(posedge clk) begin
+        if (o_pss_valid) begin
+            $display("[%0t] PSS%0d detected at start0 %0d (busy=%0b) mags={%0d,%0d,%0d}",
+                     $time, o_pss_idx, o_shift, o_busy,
+                     o_dbg_mag_pss0, o_dbg_mag_pss1, o_dbg_mag_pss2);
+
+            $fdisplay(file, "%0d;%0d", o_pss_idx, o_shift);
+        end
+    end
+
+    // BUSY monitor:
+    // ������� �������� "��������/�� ��������" = ������� i_valid ������ �� ����� o_busy=1
     always @(posedge clk) begin
         if (rst) begin
             corr_busy_d        <= 1'b0;

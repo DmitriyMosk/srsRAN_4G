@@ -10,6 +10,7 @@
       - Это сделано специально, чтобы упростить упаковку в 1 DSP48E1
 */
 
+`timescale 1ns/1ps
 `include "lte_phy_math.vh"
 
 module math_mac_macro #(
