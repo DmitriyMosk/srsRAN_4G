@@ -69,7 +69,7 @@ for p=1:3
     start1(p) = peak_idx1(p) - (M-1);    % 1-based старт окна
     stop1(p)  = start1(p) + (M-1);
 
-    start0(p) = start1(p) - 1;           % 0-based старт (как в RTL best_pos относительно начала потока)
+    start0(p) = start1(p) - 1;           % 0-based старт
     stop0(p)  = stop1(p) - 1;
 end
 
@@ -88,9 +88,33 @@ start_axis = n - (M-1);
 figure;
 for p=1:3
     subplot(3,1,p);
-    plot(start_axis(M:N), m{p}(M:N)); grid on;
+    x = start_axis(M:N);
+    yy = m{p}(M:N);
+
+    plot(x, yy);
+    grid on;
     hold on;
-    xline(start1(p), '--'); % вертикаль на старте окна
+    xline(start1(p), '--');
+
+    % --- для PSS1: выделяем точки по заданной сетке ---
+    if p == 2
+        first_peak = 2194;     % первый индекс по графику
+        peak_step  = 9600;     % расстояние между соседними пиками
+        every_n    = 1;       % выделяем каждый 16-й
+
+        mark_step = peak_step * every_n;   % 9600 * 16
+
+        mark_x = first_peak:mark_step:x(end);
+        mark_x = mark_x(mark_x >= x(1) & mark_x <= x(end));
+
+        % переводим значения x в индексы массива yy
+        mark_idx = mark_x - x(1) + 1;
+
+        plot(mark_x, yy(mark_idx), 'o', ...
+             'MarkerSize', 4, ...
+             'LineWidth', 1);
+    end
+
     title(sprintf('PSS%d: metric vs start (1-based)', p-1));
     xlabel('start sample (1-based)');
     ylabel('|Re|+|Im|');

@@ -101,7 +101,7 @@ function s2()
     fprintf("\tchannel ETU: %s\n", string(phy_channel_etu_enabled));
     fprintf("\tchannel F DOPLER: %s Hz\n", string(phy_channel_static_dopler_offset_hz));
 
-    lte_toolbox_run();
+    %lte_toolbox_run();
 end 
 
 function s2_phy_ch_awgn(sigma_noise)
@@ -294,16 +294,12 @@ function lte_toolbox_run()
         enb = evalin("base","enb");
     else
         enb = struct();
-        enb.NDLRB      = 6;     % число PRB
-        enb.NCellID    = 1;     % физ. идентификатор соты
-        enb.Ng         = 'One';         % по умолчанию
-        enb.PHICHDuration = 'Normal';
-        enb.CellRefP   = 1;             % число портов RS (уточнить)
-        enb.CFI        = 3;             % допущение для стартового поиска
-        enb.DuplexMode = 'FDD';
-        enb.NSubframe  = 0;
-        enb.NFrame     = 0;
-        enb.CyclicPrefix = 'Normal'; % 'Normal'/'Extended'
+        enb.NDLRB           = 6;     % число PRB
+        enb.Ng              = 'Sixth';         % по умолчанию
+        enb.PHICHDuration   = 'Normal';
+        enb.CellRefP        = 1;             % число портов RS (уточнить)
+        enb.DuplexMode      = 'FDD';
+        enb.CyclicPrefix    = 'Normal'; % 'Normal'/'Extended'
     end
 
     % === 2. Оценка и компенсация частотного смещения ===
@@ -324,8 +320,9 @@ function lte_toolbox_run()
 
     % === 4. OFDM‑демодуляция и приём PBCH/MIB ===
     % Подготовка сетки ресурсов на один субкадр (по умолчанию subframe 0)
-    rxGrid = lteOFDMDemodulate(enb, rxWaveform);
-
+    rxGrid = lteOFDMDemodulate(enb, rxWaveform)
+    
+    
     % PBCH располагается в субкадре 0, символы 0..3 слота 1, 4 слота 0/1 в 4×10мс.
     % LTE Toolbox делает всё внутри ltePBCHDecode.
     % Сначала выделяем индексы/символы PBCH:
@@ -346,10 +343,10 @@ function lte_toolbox_run()
     enbFromMIB = lteMIB(mibBits);
 
     % Обновляем ключевые поля конфигурации соты
-    enb.NDLRB        = enbFromMIB.NDLRB;
-    enb.Ng           = enbFromMIB.Ng;
-    enb.PHICHDuration = enbFromMIB.PHICHDuration;
-    enb.NFrame       = enbFromMIB.NFrame;
+    enb.NDLRB           = enbFromMIB.NDLRB;
+    enb.Ng              = enbFromMIB.Ng;
+    enb.PHICHDuration   = enbFromMIB.PHICHDuration;
+    enb.NFrame          = enbFromMIB.NFrame;
 
     assignin("base","lte_mib_bits", mibBits);
     assignin("base","enb_decoded", enb);
@@ -358,8 +355,8 @@ function lte_toolbox_run()
         enb.NDLRB, enb.NFrame, enb.Ng, enb.PHICHDuration);
 
     % === 5. Измерения RSRP / RSSI ===
-    % RSRP – средняя мощность RS‑RE в ваттах/отсчёт. [web:6][web:15][web:31][web:34]
-    % RSSI – суммарная мощность по всем RE в полосе. [web:6][web:12][web:18][web:31]
+    % RSRP – средняя мощность RS‑RE в ваттах/отсчёт.
+    % RSSI – суммарная мощность по всем RE в полосе.
 
     % a) Снова формируем сетку для одного субкадра (на случай обновлённого enb)
     rxGrid = lteOFDMDemodulate(enb, rxWaveform);

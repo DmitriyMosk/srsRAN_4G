@@ -278,6 +278,7 @@ function s3( ...
     
     % полезная часть OFDM-символа (без CP)
     segment_pl = segment(cp+1:end);
+    assignin("base", "PSS_RX_FOR_CONJ_EST_TD", segment_pl); 
     assert(numel(segment_pl) == Nfft); % на всякий..
 
     % FFT по Nfft
@@ -296,10 +297,15 @@ function s3( ...
     pss_nid2 = pss_phy_root_id;         % 0,1 или 2
 
     pss_ref = lte_pss_variants{pss_nid2 + 1}(:);   % 62x1
+     
+    assignin("base", "PSS_REF_FOR_CONJ_EST_FD", pss_ref);
+    assignin("base", "PSS_RX_FOR_CONJ_EST_FD", Xp); 
 
     % Оценка частотного отклика канала на PSS-поднесущих
     H_pss = Xp ./ (pss_ref + eps);
     
+    % В момент пика корреляции мы 
+    % Оценка канала с помощью умножения на сопряжённое
     H_pss_conj = Xp .* conj(pss_ref);
     
     % Вектор "номеров" поднесущих: -31..-1, +1..+31
@@ -339,10 +345,11 @@ function s3( ...
 
     Hp_test = Xp_comp ./ (pss_ref + eps);
     % через conj
+    pss_ref = pss_ref .* 10;
     Hp_test2 = Xp_comp .* (conj(pss_ref) + eps);
 
-    H_amp = 20*log10(abs(Hp_test2));    % АЧХ в dB
-    H_phase = angle(Hp_test2);          % ФЧХ в рад
+    H_amp = 20*log10(abs(Hp_test));    % АЧХ в dB
+    H_phase = angle(Hp_test);          % ФЧХ в рад
     
     figure('Name','Channel estimate from PSS');
     
