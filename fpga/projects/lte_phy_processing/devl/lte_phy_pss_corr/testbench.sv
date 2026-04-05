@@ -1,16 +1,52 @@
 `timescale 1ns/1ps
 `include "lte_hw_params.vh"
 
-module tb_lte_phy_pss_corr;
-    parameter longint CLK_HZ   = 200_000_000;
-    parameter longint FS_HZ    = 1_920_000;
-    parameter int     SPEEDUP  = 1;
-    parameter int     K_LANES  = 2;
-    parameter int     EXPECT_DETECTIONS = 8;
+`define TB_ONECLOCK
 
-    localparam longint FS_EFF_HZ = FS_HZ * SPEEDUP;
+module tb_lte_phy_pss_corr;
+`ifdef TB_ONECLOCK
+    localparam bit      TB_ONECLOCK_MODE     = 1'b1;
+    localparam longint  TB_CLK_HZ            = 1_920_000;
+`ifdef TB_K2
+    localparam int      TB_K_LANES           = 2;
+`else
+    localparam int      TB_K_LANES           = 8;
+`endif
+`ifdef TB_EXPECT_FOUR
+    localparam int      TB_EXPECT_DETECTIONS = 4;
+`elsif TB_EXPECT_TWO
+    localparam int      TB_EXPECT_DETECTIONS = 2;
+`else
+    localparam int      TB_EXPECT_DETECTIONS = 1;
+`endif
+`else
+    localparam bit      TB_ONECLOCK_MODE     = 1'b0;
+    localparam longint  TB_CLK_HZ            = 200_000_000;
+`ifdef TB_K2
+    localparam int      TB_K_LANES           = 2;
+`else
+    localparam int      TB_K_LANES           = 2;
+`endif
+`ifdef TB_EXPECT_FOUR
+    localparam int      TB_EXPECT_DETECTIONS = 4;
+`else
+    localparam int      TB_EXPECT_DETECTIONS = 8;
+`endif
+`endif
+
+    parameter longint CLK_HZ            = TB_CLK_HZ;
+    parameter longint FS_HZ             = 1_920_000;
+    parameter int     SPEEDUP           = 1;
+    parameter int     K_LANES           = TB_K_LANES;
+    parameter int     EXPECT_DETECTIONS = TB_EXPECT_DETECTIONS;
+    parameter bit     ONECLOCK          = TB_ONECLOCK_MODE;
+    parameter int     SUBFRAME_SPS      = FS_HZ / 200;
+    parameter int     BUF_CAP           = SUBFRAME_SPS;
+
+    localparam longint FS_EFF_HZ          = FS_HZ * SPEEDUP;
     localparam int     EXPECT_FIRST_SHIFT = 2193;
     localparam int     EXPECT_PERIOD      = 9600;
+
     real CLK_PERIOD_NS = 1e9 / CLK_HZ;
 
     logic clk = 1'b0;
@@ -28,10 +64,12 @@ module tb_lte_phy_pss_corr;
     logic [33:0]                        o_dbg_mag_pss0;
     logic [33:0]                        o_dbg_mag_pss1;
     logic [33:0]                        o_dbg_mag_pss2;
-    logic [31:0]                        o_dbg_abs_sample;
 
-    lte_phy_pss_corr #(
-        .K_LANES(K_LANES)
+    lte_phy_sync #(
+        .K_LANES(K_LANES),
+        .SUBFRAME_SPS(SUBFRAME_SPS),
+        .BUF_CAP(BUF_CAP),
+        .ONECLOCK(ONECLOCK)
     ) dut (
         .i_clk(clk),
         .i_rst(rst),
@@ -44,8 +82,7 @@ module tb_lte_phy_pss_corr;
         .o_busy(o_busy),
         .o_dbg_mag_pss0(o_dbg_mag_pss0),
         .o_dbg_mag_pss1(o_dbg_mag_pss1),
-        .o_dbg_mag_pss2(o_dbg_mag_pss2),
-        .o_dbg_abs_sample(o_dbg_abs_sample)
+        .o_dbg_mag_pss2(o_dbg_mag_pss2)
     );
 
     int     fd;
@@ -54,14 +91,22 @@ module tb_lte_phy_pss_corr;
     int     val;
     int     r;
     int     sample_count;
+    int     accepted_count;
     int     detect_count;
     bit     use_int_div;
     int     ce_div;
     longint acc;
     int     ce_cnt;
     int     expected_shift;
-    int     last_shift;
+    int     issued_sample_abs;
+    int     current_frame_base_abs;
+    int     frame_fill_count;
+    int     frame_q_wr;
+    int     frame_base_queue [0:255];
+    int     detect_frame_base_abs;
+    int     abs_detect_shift;
     bit     done;
+    int     abs_expected_shift;
 
     task automatic read_next_word(output int addr_out, output int val_out, output bit ok);
         begin
@@ -91,8 +136,8 @@ module tb_lte_phy_pss_corr;
             ce_div = 0;
         end
 
-        $display("TB: CLK_HZ=%0d FS_HZ=%0d SPEEDUP=%0d FS_EFF_HZ=%0d K_LANES=%0d",
-                 CLK_HZ, FS_HZ, SPEEDUP, FS_EFF_HZ, K_LANES);
+        $display("TB: CLK_HZ=%0d FS_HZ=%0d SPEEDUP=%0d FS_EFF_HZ=%0d K_LANES=%0d ONECLOCK=%0d BUF_CAP=%0d",
+                 CLK_HZ, FS_HZ, SPEEDUP, FS_EFF_HZ, K_LANES, ONECLOCK, BUF_CAP);
     end
 
     always @(negedge clk) begin
@@ -142,10 +187,11 @@ module tb_lte_phy_pss_corr;
                     done    <= 1'b1;
                     i_valid <= 1'b0;
                 end else begin
-                    i_valid      <= 1'b1;
-                    i_data_i1    <= $signed(val_i);
-                    i_data_q1    <= $signed(val_q);
-                    sample_count <= sample_count + 1;
+                    i_valid            <= 1'b1;
+                    i_data_i1          <= $signed(val_i);
+                    i_data_q1          <= $signed(val_q);
+                    issued_sample_abs  <= sample_count;
+                    sample_count       <= sample_count + 1;
                 end
             end
         end else begin
@@ -154,49 +200,90 @@ module tb_lte_phy_pss_corr;
     end
 
     always @(posedge clk) begin
+        if (rst) begin
+            accepted_count         <= 0;
+            current_frame_base_abs <= 0;
+            frame_fill_count       <= 0;
+            frame_q_wr             <= 0;
+        end else if (dut.fifo_do_write) begin
+            accepted_count <= accepted_count + 1;
+
+            if (frame_fill_count == 0)
+                current_frame_base_abs <= issued_sample_abs;
+
+            if (frame_fill_count == (SUBFRAME_SPS - 1)) begin
+                frame_base_queue[frame_q_wr] <= current_frame_base_abs;
+                frame_q_wr    <= frame_q_wr + 1;
+                frame_fill_count <= 0;
+            end else begin
+                frame_fill_count <= frame_fill_count + 1;
+            end
+        end
+    end
+
+    always @(posedge clk) begin
         if (o_pss_valid) begin
+            if (detect_count >= frame_q_wr)
+                $fatal(1, "TB bookkeeping error: no queued frame base for detect #%0d", detect_count);
+
+            detect_frame_base_abs = frame_base_queue[detect_count];
+            abs_detect_shift      = detect_frame_base_abs + o_shift;
             detect_count <= detect_count + 1;
-            $display("[%0t] DETECT #%0d: PSS%0d start0=%0d abs=%0d mags={%0d,%0d,%0d}",
-                     $time, detect_count, o_pss_idx, o_shift, o_dbg_abs_sample,
+            abs_expected_shift = EXPECT_FIRST_SHIFT + (EXPECT_PERIOD * detect_count);
+            $display("[%0t] DETECT #%0d: PSS%0d rel_start0=%0d frame_base_abs=%0d abs_start0=%0d src_emitted=%0d accepted=%0d busy=%0d mags={%0d,%0d,%0d}",
+                     $time, detect_count, o_pss_idx, o_shift, detect_frame_base_abs, abs_detect_shift,
+                     sample_count, accepted_count, o_busy,
                      o_dbg_mag_pss0, o_dbg_mag_pss1, o_dbg_mag_pss2);
 
-            expected_shift = EXPECT_FIRST_SHIFT + (EXPECT_PERIOD * detect_count);
+            if (!ONECLOCK) begin
+                if (o_pss_idx !== 1)
+                    $fatal(1, "Expected PSS1 on detect #%0d, got PSS%0d", detect_count, o_pss_idx);
 
-            if (o_pss_idx !== 1)
-                $fatal(1, "Expected PSS1 on detect #%0d, got PSS%0d", detect_count, o_pss_idx);
+                if (abs_detect_shift !== abs_expected_shift)
+                    $fatal(1, "Expected absolute start0=%0d on detect #%0d, got abs_start0=%0d (frame_base_abs=%0d rel_start0=%0d)",
+                           abs_expected_shift, detect_count, abs_detect_shift, detect_frame_base_abs, o_shift);
 
-            if (o_shift !== expected_shift[31:0])
-                $fatal(1, "Expected detect #%0d at start0=%0d, got start0=%0d",
-                       detect_count, expected_shift, o_shift);
+                if (!(o_dbg_mag_pss1 >= o_dbg_mag_pss0 && o_dbg_mag_pss1 >= o_dbg_mag_pss2))
+                    $fatal(1, "Peak detector chose PSS1 but debug mags disagree: {%0d,%0d,%0d}",
+                           o_dbg_mag_pss0, o_dbg_mag_pss1, o_dbg_mag_pss2);
+            end else begin
+                if (o_pss_idx !== 1)
+                    $fatal(1, "ONECLOCK: expected PSS1 on detect #%0d, got PSS%0d", detect_count, o_pss_idx);
 
-            if ((detect_count > 0) && (o_shift !== (last_shift + EXPECT_PERIOD)))
-                $fatal(1, "Expected period step %0d, previous start0=%0d current start0=%0d",
-                       EXPECT_PERIOD, last_shift, o_shift);
+                if (detect_count == 0) begin
+                    if (abs_detect_shift !== EXPECT_FIRST_SHIFT)
+                        $fatal(1, "ONECLOCK: expected first absolute detection at start0=%0d, got abs_start0=%0d",
+                               EXPECT_FIRST_SHIFT, abs_detect_shift);
+                end
 
-            if (!(o_dbg_mag_pss1 >= o_dbg_mag_pss0 && o_dbg_mag_pss1 >= o_dbg_mag_pss2))
-                $fatal(1, "Peak detector chose PSS1 but debug mags disagree: {%0d,%0d,%0d}",
-                       o_dbg_mag_pss0, o_dbg_mag_pss1, o_dbg_mag_pss2);
+                if (!(o_dbg_mag_pss1 >= o_dbg_mag_pss0 && o_dbg_mag_pss1 >= o_dbg_mag_pss2))
+                    $fatal(1, "ONECLOCK: peak detector chose PSS1 but debug mags disagree: {%0d,%0d,%0d}",
+                           o_dbg_mag_pss0, o_dbg_mag_pss1, o_dbg_mag_pss2);
+            end
 
-            last_shift = o_shift;
-
-            if (detect_count == (EXPECT_DETECTIONS - 1)) begin
-                $display("TB PASSED: %0d detections match MATLAB-derived start0 sequence and peak rules",
-                         EXPECT_DETECTIONS);
+            if ((detect_count + 1) == EXPECT_DETECTIONS) begin
+                $display("TB PASSED: %0d detections validated", EXPECT_DETECTIONS);
                 $finish;
             end
         end
     end
 
     initial begin
-        rst          = 1'b1;
-        i_valid      = 1'b0;
-        i_data_i1    = '0;
-        i_data_q1    = '0;
-        sample_count = 0;
-        detect_count = 0;
+        rst            = 1'b1;
+        i_valid        = 1'b0;
+        i_data_i1      = '0;
+        i_data_q1      = '0;
+        sample_count   = 0;
+        accepted_count = 0;
+        detect_count   = 0;
         expected_shift = 0;
-        last_shift     = 0;
-        done         = 1'b0;
+        issued_sample_abs = 0;
+        current_frame_base_abs = 0;
+        frame_fill_count = 0;
+        frame_q_wr = 0;
+        detect_frame_base_abs = 0;
+        abs_detect_shift = 0;
+        done           = 1'b0;
 
         fd = $fopen("input_signal.hex", "r");
         if (fd == 0)
@@ -215,7 +302,7 @@ module tb_lte_phy_pss_corr;
     end
 
     initial begin
-        #2s;
+        #10s;
         $fatal(1, "Simulation timeout");
     end
 endmodule

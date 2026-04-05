@@ -8,11 +8,13 @@ module system_lte_bd #(
     // целевая частота дискретизации для PSS
     parameter LTE_CORR_FS       = 3840000,
     // количество корреляторов на PSS
-    parameter LTE_CORR_LANES    = 2,
+    parameter LTE_CORR_LANES    = 8,
     // длительность PSS в семплах
     parameter LTE_PSS_TD_LEN    = 256,
-    
-    parameter LTE_TARGET_FS     = 1920000
+
+    parameter LTE_TARGET_FS     = LTE_CORR_FS,
+    parameter LTE_SUBFRAME_SPS  = (LTE_TARGET_FS / 200),
+    parameter LTE_BUF_CAP       = LTE_SUBFRAME_SPS
 ) (
     input wire i_clk,
     input wire i_rst,
@@ -38,7 +40,9 @@ module system_lte_bd #(
         .LTE_CORR_FS(LTE_CORR_FS), 
         .LTE_CORR_LANES(LTE_CORR_LANES),
         .LTE_PSS_TD_LEN(LTE_PSS_TD_LEN),
-        .LTE_TARGET_FS(LTE_TARGET_FS)
+        .LTE_TARGET_FS(LTE_TARGET_FS),
+        .LTE_SUBFRAME_SPS(LTE_SUBFRAME_SPS),
+        .LTE_BUF_CAP(LTE_BUF_CAP)
     ) u_system_lte_bd (
         .i_clk(i_clk),
         .i_rst(i_rst),

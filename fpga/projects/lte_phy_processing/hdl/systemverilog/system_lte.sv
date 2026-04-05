@@ -6,11 +6,13 @@ module system_lte #(
     // целевая частота дискретизации для PSS
     parameter int LTE_CORR_FS       = 1920000,
     // количество корреляторов на PSS
-    parameter int LTE_CORR_LANES    = 2,
+    parameter int LTE_CORR_LANES    = 4,
     // длительность PSS в семплах
     parameter int LTE_PSS_TD_LEN    = 128,
 
-    parameter int LTE_TARGET_FS     = 1_920_000
+    parameter int LTE_TARGET_FS     = 1_920_000,
+    parameter int LTE_SUBFRAME_SPS  = (LTE_TARGET_FS / 200),
+    parameter int LTE_BUF_CAP       = LTE_SUBFRAME_SPS
 )(
     input  wire                           i_clk,
     input  wire                           i_rst,
@@ -31,11 +33,14 @@ module system_lte #(
     output wire [33:0]                    o_dbg_mag_pss1,
     output wire [33:0]                    o_dbg_mag_pss2
 );
-
-    lte_phy_pss_corr #(
+    
+    wire i_data_valid_1 = i_data_valid_i1 && i_data_valid_q1;
+    
+    lte_phy_sync #(
         .LTE_PSS_TD_LEN(LTE_PSS_TD_LEN),
         .K_LANES(LTE_CORR_LANES),
-        .LTE_TARGET_FS(LTE_TARGET_FS)
+        .SUBFRAME_SPS(LTE_SUBFRAME_SPS),
+        .BUF_CAP(LTE_BUF_CAP)
     ) u_lte_pss_detector (
         .i_clk(i_clk),
         .i_rst(i_rst),
@@ -45,11 +50,10 @@ module system_lte #(
         .o_pss_idx(o_dbg_pss_idx),
         .o_pss_valid(o_data_valid_1),
         .o_shift(o_dbg_shift),
-        .o_busy(),
         .o_dbg_mag_pss0(o_dbg_mag_pss0),
         .o_dbg_mag_pss1(o_dbg_mag_pss1),
         .o_dbg_mag_pss2(o_dbg_mag_pss2),
-        .o_dbg_abs_sample()
+        .o_busy()
     );
 
     assign o_data_i1 = i_data_i1;

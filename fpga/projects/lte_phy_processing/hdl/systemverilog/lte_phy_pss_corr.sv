@@ -6,8 +6,7 @@ module lte_phy_pss_corr #(
     parameter int FMA_PIPE_SIZE  = 1,
     parameter int FMA_ACC_SIZE   = 48,
     parameter int LTE_PSS_TD_LEN = 128,
-    parameter int LTE_TARGET_FS  = 1_920_000,
-    parameter int RING_CAP       = 256
+    parameter int SUBFRAME_SPS   = 9600
 )(
     input  wire                               i_clk,
     input  wire                               i_rst,
@@ -15,6 +14,7 @@ module lte_phy_pss_corr #(
     input  wire signed [`HW_ADC_WIDTH-1:0]    i_data_q1,
     input  wire                               i_valid,
 
+    output wire                               o_sample_ready,
     output reg  [$clog2(`LTE_PSS_COUNT)-1:0]  o_pss_idx,
     output reg                                o_pss_valid,
     output reg  [31:0]                        o_shift,
@@ -22,28 +22,33 @@ module lte_phy_pss_corr #(
 
     output reg  [33:0]                        o_dbg_mag_pss0,
     output reg  [33:0]                        o_dbg_mag_pss1,
-    output reg  [33:0]                        o_dbg_mag_pss2,
-    output reg  [31:0]                        o_dbg_abs_sample
+    output reg  [33:0]                        o_dbg_mag_pss2
 );
 
     localparam int PSS_COUNT      = `LTE_PSS_COUNT;
     localparam int ADC_W          = `HW_ADC_WIDTH;
     localparam int PSS_LEN        = LTE_PSS_TD_LEN;
-    localparam int PSS_ADDR_W     = (PSS_LEN <= 2) ? 1 : $clog2(PSS_LEN);
     localparam int PACKED_W       = 2 * ADC_W;
     localparam int CORR_W         = 16;
     localparam int COEF_W         = 32;
     localparam int MAG_W          = FMA_ACC_SIZE + 2;
-    localparam int SCAN_STEPS     = PSS_LEN + K_LANES - 1;
-    localparam int STEP_W         = (SCAN_STEPS <= 2) ? 1 : $clog2(SCAN_STEPS);
-    localparam int WINCNT_W       = (SCAN_STEPS <= 1) ? 1 : $clog2(SCAN_STEPS + 1);
-    localparam int WINDOW_ADDR_W  = (SCAN_STEPS <= 2) ? 1 : $clog2(SCAN_STEPS);
-    localparam int PERIOD_SPS     = LTE_TARGET_FS / 200;
+    localparam int PSS_ADDR_W     = (PSS_LEN <= 2) ? 1 : $clog2(PSS_LEN);
+    localparam int FRAME_ADDR_W   = (SUBFRAME_SPS <= 2) ? 1 : $clog2(SUBFRAME_SPS);
+    localparam int FRAME_CNT_W    = (SUBFRAME_SPS <= 1) ? 1 : $clog2(SUBFRAME_SPS + 1);
+    localparam int STARTS_PER_FRAME = SUBFRAME_SPS - PSS_LEN + 1;
+    localparam int START_W        = (STARTS_PER_FRAME <= 1) ? 1 : $clog2(STARTS_PER_FRAME);
+    localparam int LANE_W         = (K_LANES <= 1) ? 1 : $clog2(K_LANES + 1);
+    localparam int MAX_SCAN_STEPS = PSS_LEN + K_LANES - 1;
+    localparam int STEP_W         = (MAX_SCAN_STEPS <= 2) ? 1 : $clog2(MAX_SCAN_STEPS);
 
-    localparam [1:0] ST_FILL   = 2'd0;
-    localparam [1:0] ST_PRIME  = 2'd1;
-    localparam [1:0] ST_STREAM = 2'd2;
-    localparam [1:0] ST_WAIT   = 2'd3;
+    // CAPTURE: collect one full subframe into frame_mem.
+    // PRIME:   give the synchronous PSS ROM one cycle to produce tap 0.
+    // STREAM:  walk a shared sample stream across K adjacent correlation lanes.
+    // WAIT:    wait until every active lane returns its correlation result.
+    localparam [1:0] ST_CAPTURE = 2'd0;
+    localparam [1:0] ST_PRIME   = 2'd1;
+    localparam [1:0] ST_STREAM  = 2'd2;
+    localparam [1:0] ST_WAIT    = 2'd3;
 
     function automatic signed [CORR_W-1:0] sx_adc(input signed [ADC_W-1:0] v);
         begin
@@ -69,57 +74,25 @@ module lte_phy_pss_corr #(
         end
     endfunction
 
-    function automatic [WINDOW_ADDR_W-1:0] win_next_idx(
-        input [WINDOW_ADDR_W-1:0] idx
-    );
+    function automatic int active_lanes_from(input int start_idx);
+        int remaining;
         begin
-            if (idx == (SCAN_STEPS - 1))
-                win_next_idx = '0;
+            remaining = STARTS_PER_FRAME - start_idx;
+            if (remaining <= 0)
+                active_lanes_from = 0;
+            else if (remaining >= K_LANES)
+                active_lanes_from = K_LANES;
             else
-                win_next_idx = idx + 1'b1;
+                active_lanes_from = remaining;
         end
     endfunction
 
-    function automatic [WINDOW_ADDR_W-1:0] win_advance(
-        input [WINDOW_ADDR_W-1:0] idx,
-        input integer delta
-    );
-        integer tmp;
+    function automatic int scan_steps_from_lanes(input int lane_count);
         begin
-            tmp = idx + delta;
-            if (tmp >= SCAN_STEPS)
-                tmp = tmp - SCAN_STEPS;
-            win_advance = tmp[WINDOW_ADDR_W-1:0];
-        end
-    endfunction
-
-    function automatic [$clog2(PSS_COUNT)-1:0] best_pss_idx(
-        input [MAG_W-1:0] mag0,
-        input [MAG_W-1:0] mag1,
-        input [MAG_W-1:0] mag2
-    );
-        begin
-            if ((mag2 >= mag1) && (mag2 >= mag0))
-                best_pss_idx = 2;
-            else if (mag1 >= mag0)
-                best_pss_idx = 1;
+            if (lane_count <= 0)
+                scan_steps_from_lanes = 1;
             else
-                best_pss_idx = 0;
-        end
-    endfunction
-
-    function automatic [MAG_W-1:0] best_pss_mag(
-        input [MAG_W-1:0] mag0,
-        input [MAG_W-1:0] mag1,
-        input [MAG_W-1:0] mag2
-    );
-        begin
-            if ((mag2 >= mag1) && (mag2 >= mag0))
-                best_pss_mag = mag2;
-            else if (mag1 >= mag0)
-                best_pss_mag = mag1;
-            else
-                best_pss_mag = mag0;
+                scan_steps_from_lanes = PSS_LEN + lane_count - 1;
         end
     endfunction
 
@@ -128,97 +101,67 @@ module lte_phy_pss_corr #(
             $fatal(1, "lte_phy_pss_corr: K_LANES must be >= 1");
         if (PSS_LEN != 128 && PSS_LEN != 256)
             $fatal(1, "lte_phy_pss_corr: only PSS_LEN=128/256 are supported");
-        if (PERIOD_SPS < 1)
-            $fatal(1, "lte_phy_pss_corr: PERIOD_SPS must be >= 1");
-        if (RING_CAP < SCAN_STEPS)
-            $fatal(1, "lte_phy_pss_corr: RING_CAP must be >= SCAN_STEPS");
+        if (SUBFRAME_SPS < PSS_LEN)
+            $fatal(1, "lte_phy_pss_corr: SUBFRAME_SPS must be >= PSS_LEN");
     end
 
-    // -------------------------------------------------------------------------
-    // Input ring buffer
-    // -------------------------------------------------------------------------
-    reg  [31:0]           abs_in_count;
-    reg  [31:0]           rd_abs_count;
-    reg                   overflow_sticky;
-    reg                   ring_rd_ready_r;
-    reg                   fill_pending;
-    reg  [31:0]           fill_abs_pending;
+    reg [1:0]                   state;
+    reg [FRAME_CNT_W-1:0]       capture_count;
+    reg [START_W-1:0]           batch_base_idx;
+    reg [LANE_W-1:0]            batch_active_lanes;
+    reg [STEP_W-1:0]            batch_scan_steps;
+    reg [STEP_W-1:0]            feed_step;
+    reg [K_LANES-1:0]           lane_done;
 
-    wire                  ring_full;
-    wire                  ring_empty;
-    wire                  ring_wd_fire;
-    wire                  ring_rd_fire;
-    wire [PACKED_W-1:0]   ring_rd_data;
-    wire                  ring_rd_valid;
-    wire [PACKED_W-1:0]   ring_wr_data = {i_data_q1, i_data_i1};
-    wire                  ring_do_read = ring_rd_ready_r && !ring_empty;
+    reg signed [CORR_W-1:0]     sample_i_r;
+    reg signed [CORR_W-1:0]     sample_q_r;
+    reg [STEP_W-1:0]            sample_step_r;
+    reg                         sample_valid_r;
 
-    mem_ring_buffer #(
-        .CAP(RING_CAP),
+    reg                         rom_ena;
+    reg [PSS_ADDR_W-1:0]        rom_addr_cnt;
+    wire [31:0]                 pss_rom_dout [0:PSS_COUNT-1];
+    reg [COEF_W-1:0]            coef_pipe [0:PSS_COUNT-1][0:K_LANES-1];
+
+    reg                         frame_best_valid;
+    reg [MAG_W-1:0]             frame_best_mag;
+    reg [$clog2(PSS_COUNT)-1:0] frame_best_pss;
+    reg [31:0]                  frame_best_shift;
+    reg [MAG_W-1:0]             frame_best_mag0;
+    reg [MAG_W-1:0]             frame_best_mag1;
+    reg [MAG_W-1:0]             frame_best_mag2;
+
+    wire [PACKED_W-1:0]         frame_wr_data = {i_data_q1, i_data_i1};
+    wire                        frame_wr_en   = (state == ST_CAPTURE) && i_valid;
+    reg                         frame_rd_en;
+    reg [FRAME_ADDR_W-1:0]      frame_rd_addr;
+    wire [PACKED_W-1:0]         frame_rd_data;
+
+    mem_frame_buffer #(
+        .CAP(SUBFRAME_SPS),
         .WIDTH(PACKED_W)
-    ) u_ring (
+    ) u_frame_mem (
         .i_clk(i_clk),
-        .i_rst(i_rst),
-        .i_wd_data(ring_wr_data),
-        .i_wd_ready(i_valid),
-        .i_rd_ready(ring_rd_ready_r),
-        .o_rd_data(ring_rd_data),
-        .o_rd_valid(ring_rd_valid),
-        .o_full(ring_full),
-        .o_empty(ring_empty),
-        .o_wd_fire(ring_wd_fire),
-        .o_rd_fire(ring_rd_fire),
-        .o_wd_idx(),
-        .o_rd_idx(),
-        .o_level()
+        .i_wr_en(frame_wr_en),
+        .i_wr_addr(capture_count[FRAME_ADDR_W-1:0]),
+        .i_wr_data(frame_wr_data),
+        .i_rd_en(frame_rd_en),
+        .i_rd_addr(frame_rd_addr),
+        .o_rd_data(frame_rd_data)
     );
 
-    // -------------------------------------------------------------------------
-    // Sliding batch buffer:
-    // keeps SCAN_STEPS samples and advances by K_LANES without physically shifting
-    // -------------------------------------------------------------------------
-    reg [PACKED_W-1:0] window_mem [0:SCAN_STEPS-1];
-    reg [WINCNT_W-1:0]      window_count;
-    reg [WINDOW_ADDR_W-1:0] window_head_ptr;
-    reg [WINDOW_ADDR_W-1:0] window_wr_ptr;
-    reg [WINDOW_ADDR_W-1:0] window_rd_ptr;
-    reg [31:0]              window_base_abs;
-
-    // -------------------------------------------------------------------------
-    // Batch scheduler and shared sample stream
-    // -------------------------------------------------------------------------
-    reg [1:0]         state;
-    reg [STEP_W-1:0]  feed_step;
-    reg [31:0]        batch_base_abs;
-    reg [K_LANES-1:0] lane_done;
-
-    reg signed [CORR_W-1:0] sample_i_r;
-    reg signed [CORR_W-1:0] sample_q_r;
-    reg [STEP_W-1:0]        sample_step_r;
-    reg                     sample_valid_r;
-
     wire lane_valid [0:K_LANES-1];
+    wire corr_rst = i_rst || (state == ST_CAPTURE) || (state == ST_PRIME);
 
     genvar g_lane;
     generate
         for (g_lane = 0; g_lane < K_LANES; g_lane = g_lane + 1) begin : gen_lane_valid
             assign lane_valid[g_lane] = sample_valid_r &&
+                                        (g_lane < batch_active_lanes) &&
                                         (sample_step_r >= g_lane) &&
                                         (sample_step_r < (PSS_LEN + g_lane));
         end
     endgenerate
-
-    // -------------------------------------------------------------------------
-    // PSS coefficient stream:
-    // one ROM tap per PSS is read every cycle, then delayed across lanes
-    // -------------------------------------------------------------------------
-    reg                  rom_ena;
-    reg [PSS_ADDR_W-1:0] rom_addr_cnt;
-    wire [31:0]          pss_rom_dout [0:PSS_COUNT-1];
-
-    // coef_pipe[pss][lane]:
-    // lane 0 sees the newest tap, lane N sees the same tap delayed by N cycles
-    reg [COEF_W-1:0] coef_pipe [0:PSS_COUNT-1][0:K_LANES-1];
 
     generate
         if (PSS_LEN == 128) begin : gen_pss_128
@@ -232,9 +175,6 @@ module lte_phy_pss_corr #(
         end
     endgenerate
 
-    // -------------------------------------------------------------------------
-    // 3 x K_LANES correlators
-    // -------------------------------------------------------------------------
     wire signed [FMA_ACC_SIZE-1:0] corr_re [0:PSS_COUNT-1][0:K_LANES-1];
     wire signed [FMA_ACC_SIZE-1:0] corr_im [0:PSS_COUNT-1][0:K_LANES-1];
     wire                           corr_v  [0:PSS_COUNT-1][0:K_LANES-1];
@@ -249,7 +189,7 @@ module lte_phy_pss_corr #(
                     .fma_pipe_size(FMA_PIPE_SIZE),
                     .fma_acc_size(FMA_ACC_SIZE)
                 ) u_corr (
-                    .i_rst(i_rst),
+                    .i_rst(corr_rst),
                     .i_clk(i_clk),
                     .i_data_i1(sample_i_r),
                     .i_data_q1(sample_q_r),
@@ -265,46 +205,49 @@ module lte_phy_pss_corr #(
         end
     endgenerate
 
-    // -------------------------------------------------------------------------
-    // Peak detector over one LTE PSS period
-    // -------------------------------------------------------------------------
-    reg                                period_best_valid;
-    reg [31:0]                         period_base;
-    reg [31:0]                         period_best_shift;
-    reg [$clog2(PSS_COUNT)-1:0]        period_best_pss;
-    reg [MAG_W-1:0]                    period_best_mag;
-    reg [MAG_W-1:0]                    period_best_mag0;
-    reg [MAG_W-1:0]                    period_best_mag1;
-    reg [MAG_W-1:0]                    period_best_mag2;
-
-    assign o_busy = overflow_sticky;
+    assign o_sample_ready = (state == ST_CAPTURE);
+    assign o_busy = (state != ST_CAPTURE);
 
     integer li;
     integer pi;
     always @(posedge i_clk) begin
+        reg [K_LANES-1:0]           active_mask;
+        reg [K_LANES-1:0]           lane_done_n;
+        reg                         frame_best_valid_n;
+        reg [MAG_W-1:0]             frame_best_mag_n;
+        reg [$clog2(PSS_COUNT)-1:0] frame_best_pss_n;
+        reg [31:0]                  frame_best_shift_n;
+        reg [MAG_W-1:0]             frame_best_mag0_n;
+        reg [MAG_W-1:0]             frame_best_mag1_n;
+        reg [MAG_W-1:0]             frame_best_mag2_n;
+        reg [MAG_W-1:0]             mag0;
+        reg [MAG_W-1:0]             mag1;
+        reg [MAG_W-1:0]             mag2;
+        reg [MAG_W-1:0]             cand_mag;
+        reg [$clog2(PSS_COUNT)-1:0] cand_pss;
+        reg [31:0]                  cand_shift;
+        reg                         batch_all_done;
+        integer                     next_base_int;
+        integer                     next_lanes_int;
+        integer                     next_steps_int;
+        integer                     init_lanes_int;
+        integer                     init_steps_int;
+
         if (i_rst) begin
-            abs_in_count      <= 32'd0;
-            rd_abs_count      <= 32'd0;
-            overflow_sticky   <= 1'b0;
-            ring_rd_ready_r   <= 1'b0;
-            fill_pending      <= 1'b0;
-            fill_abs_pending  <= 32'd0;
-
-            window_count      <= '0;
-            window_head_ptr   <= '0;
-            window_wr_ptr     <= '0;
-            window_rd_ptr     <= '0;
-            window_base_abs   <= 32'd0;
-
-            state             <= ST_FILL;
+            state             <= ST_CAPTURE;
+            capture_count     <= '0;
+            batch_base_idx    <= '0;
+            batch_active_lanes<= '0;
+            batch_scan_steps  <= '0;
             feed_step         <= '0;
-            batch_base_abs    <= 32'd0;
             lane_done         <= '0;
 
             sample_i_r        <= '0;
             sample_q_r        <= '0;
             sample_step_r     <= '0;
             sample_valid_r    <= 1'b0;
+            frame_rd_en       <= 1'b0;
+            frame_rd_addr     <= '0;
 
             rom_ena           <= 1'b0;
             rom_addr_cnt      <= '0;
@@ -315,125 +258,138 @@ module lte_phy_pss_corr #(
             o_dbg_mag_pss0    <= 34'd0;
             o_dbg_mag_pss1    <= 34'd0;
             o_dbg_mag_pss2    <= 34'd0;
-            o_dbg_abs_sample  <= 32'd0;
 
-            period_best_valid <= 1'b0;
-            period_base       <= 32'd0;
-            period_best_shift <= 32'd0;
-            period_best_pss   <= '0;
-            period_best_mag   <= '0;
-            period_best_mag0  <= '0;
-            period_best_mag1  <= '0;
-            period_best_mag2  <= '0;
+            frame_best_valid  <= 1'b0;
+            frame_best_mag    <= '0;
+            frame_best_pss    <= '0;
+            frame_best_shift  <= 32'd0;
+            frame_best_mag0   <= '0;
+            frame_best_mag1   <= '0;
+            frame_best_mag2   <= '0;
 
             for (pi = 0; pi < PSS_COUNT; pi = pi + 1) begin
                 for (li = 0; li < K_LANES; li = li + 1)
                     coef_pipe[pi][li] <= '0;
             end
         end else begin
-            o_pss_valid      <= 1'b0;
-            ring_rd_ready_r  <= 1'b0;
-            o_dbg_abs_sample <= abs_in_count;
+            o_pss_valid <= 1'b0;
+            frame_rd_en <= 1'b0;
 
-            if (i_valid && ring_full && !ring_do_read)
-                overflow_sticky <= 1'b1;
-
-            if (i_valid)
-                abs_in_count <= abs_in_count + 1'b1;
-
-            if (ring_do_read) begin
-                fill_pending     <= 1'b1;
-                fill_abs_pending <= rd_abs_count;
-                rd_abs_count     <= rd_abs_count + 1'b1;
-            end
-
-            if (ring_rd_valid) begin
-                window_mem[window_wr_ptr] <= ring_rd_data;
-                if (window_count == 0)
-                    window_base_abs <= fill_abs_pending;
-                window_wr_ptr <= win_next_idx(window_wr_ptr);
-                window_count  <= window_count + 1'b1;
-                fill_pending  <= 1'b0;
-            end
-
-            // One candidate result per lane per batch.
+            active_mask = '0;
             for (li = 0; li < K_LANES; li = li + 1) begin
-                if (!lane_done[li] &&
+                if (li < batch_active_lanes)
+                    active_mask[li] = 1'b1;
+            end
+
+            lane_done_n        = lane_done;
+            frame_best_valid_n = frame_best_valid;
+            frame_best_mag_n   = frame_best_mag;
+            frame_best_pss_n   = frame_best_pss;
+            frame_best_shift_n = frame_best_shift;
+            frame_best_mag0_n  = frame_best_mag0;
+            frame_best_mag1_n  = frame_best_mag1;
+            frame_best_mag2_n  = frame_best_mag2;
+
+            for (li = 0; li < K_LANES; li = li + 1) begin
+                if ((li < batch_active_lanes) &&
+                    !lane_done_n[li] &&
                     corr_v[0][li] &&
                     corr_v[1][li] &&
                     corr_v[2][li]) begin
-                    reg [MAG_W-1:0] mag0;
-                    reg [MAG_W-1:0] mag1;
-                    reg [MAG_W-1:0] mag2;
-                    reg [MAG_W-1:0] cand_mag;
-                    reg [$clog2(PSS_COUNT)-1:0] cand_pss;
-                    reg [31:0] cand_shift;
-                    reg flush_old_period;
 
                     mag0 = l1mag(corr_re[0][li], corr_im[0][li]);
                     mag1 = l1mag(corr_re[1][li], corr_im[1][li]);
                     mag2 = l1mag(corr_re[2][li], corr_im[2][li]);
 
-                    cand_pss   = best_pss_idx(mag0, mag1, mag2);
-                    cand_mag   = best_pss_mag(mag0, mag1, mag2);
-                    cand_shift = batch_base_abs + li;
-
-                    flush_old_period = (cand_shift >= (period_base + PERIOD_SPS));
-
-                    if (flush_old_period) begin
-                        if (period_best_valid) begin
-                            o_pss_valid    <= 1'b1;
-                            o_pss_idx      <= period_best_pss;
-                            o_shift        <= period_best_shift;
-                            o_dbg_mag_pss0 <= period_best_mag0[33:0];
-                            o_dbg_mag_pss1 <= period_best_mag1[33:0];
-                            o_dbg_mag_pss2 <= period_best_mag2[33:0];
-                        end
-                        period_base       <= period_base + PERIOD_SPS;
-                        period_best_valid <= 1'b0;
+                    if ((mag2 >= mag1) && (mag2 >= mag0)) begin
+                        cand_mag = mag2;
+                        cand_pss = 2;
+                    end else if (mag1 >= mag0) begin
+                        cand_mag = mag1;
+                        cand_pss = 1;
+                    end else begin
+                        cand_mag = mag0;
+                        cand_pss = 0;
                     end
 
-                    if (flush_old_period || !period_best_valid ||
-                        (cand_mag > period_best_mag) ||
-                        ((cand_mag == period_best_mag) && (cand_shift < period_best_shift))) begin
-                        period_best_valid <= 1'b1;
-                        period_best_shift <= cand_shift;
-                        period_best_pss   <= cand_pss;
-                        period_best_mag   <= cand_mag;
-                        period_best_mag0  <= mag0;
-                        period_best_mag1  <= mag1;
-                        period_best_mag2  <= mag2;
+                    // The winner is always reported relative to the captured
+                    // subframe, not to any absolute stream index.
+                    cand_shift = batch_base_idx + li;
+
+                    if (!frame_best_valid_n ||
+                        (cand_mag > frame_best_mag_n) ||
+                        ((cand_mag == frame_best_mag_n) && (cand_shift < frame_best_shift_n))) begin
+                        frame_best_valid_n = 1'b1;
+                        frame_best_mag_n   = cand_mag;
+                        frame_best_pss_n   = cand_pss;
+                        frame_best_shift_n = cand_shift;
+                        frame_best_mag0_n  = mag0;
+                        frame_best_mag1_n  = mag1;
+                        frame_best_mag2_n  = mag2;
                     end
 
-                    lane_done[li] <= 1'b1;
+                    lane_done_n[li] = 1'b1;
                 end
             end
 
+            batch_all_done = ((lane_done_n & active_mask) == active_mask) && (batch_active_lanes != 0);
+
+            frame_best_valid <= frame_best_valid_n;
+            frame_best_mag   <= frame_best_mag_n;
+            frame_best_pss   <= frame_best_pss_n;
+            frame_best_shift <= frame_best_shift_n;
+            frame_best_mag0  <= frame_best_mag0_n;
+            frame_best_mag1  <= frame_best_mag1_n;
+            frame_best_mag2  <= frame_best_mag2_n;
+            lane_done        <= lane_done_n;
+
             case (state)
-                ST_FILL: begin
+                ST_CAPTURE: begin
                     sample_valid_r <= 1'b0;
                     rom_ena        <= 1'b0;
 
-                    if ((window_count < SCAN_STEPS) && !fill_pending && !ring_empty)
-                        ring_rd_ready_r <= 1'b1;
+                    if (i_valid) begin
+                        if (capture_count == (SUBFRAME_SPS - 1)) begin
+                            init_lanes_int = active_lanes_from(0);
+                            init_steps_int = scan_steps_from_lanes(init_lanes_int);
 
-                    if (window_count == SCAN_STEPS) begin
-                        batch_base_abs <= window_base_abs;
-                        window_rd_ptr  <= window_head_ptr;
-                        feed_step      <= '0;
-                        lane_done      <= '0;
-                        for (pi = 0; pi < PSS_COUNT; pi = pi + 1) begin
-                            for (li = 0; li < K_LANES; li = li + 1)
-                                coef_pipe[pi][li] <= '0;
+                            capture_count      <= '0;
+                            batch_base_idx     <= '0;
+                            batch_active_lanes <= init_lanes_int[LANE_W-1:0];
+                            batch_scan_steps   <= init_steps_int[STEP_W-1:0];
+                            feed_step          <= '0;
+                            lane_done          <= '0;
+                            frame_best_valid   <= 1'b0;
+                            frame_best_mag     <= '0;
+                            frame_best_pss     <= '0;
+                            frame_best_shift   <= 32'd0;
+                            frame_best_mag0    <= '0;
+                            frame_best_mag1    <= '0;
+                            frame_best_mag2    <= '0;
+
+                            for (pi = 0; pi < PSS_COUNT; pi = pi + 1) begin
+                                for (li = 0; li < K_LANES; li = li + 1)
+                                    coef_pipe[pi][li] <= '0;
+                            end
+
+                            frame_rd_en   <= 1'b1;
+                            frame_rd_addr <= '0;
+                            rom_ena      <= 1'b1;
+                            rom_addr_cnt <= '0;
+                            state        <= ST_PRIME;
+                        end else begin
+                            capture_count <= capture_count + 1'b1;
                         end
-                        rom_ena      <= 1'b1;
-                        rom_addr_cnt <= '0;
-                        state        <= ST_PRIME;
                     end
                 end
 
                 ST_PRIME: begin
                     sample_valid_r <= 1'b0;
+
+                    if (batch_scan_steps > 1) begin
+                        frame_rd_en   <= 1'b1;
+                        frame_rd_addr <= batch_base_idx + 1'b1;
+                    end
 
                     if (PSS_LEN > 1) begin
                         rom_ena      <= 1'b1;
@@ -446,11 +402,13 @@ module lte_phy_pss_corr #(
                 end
 
                 ST_STREAM: begin
-                    sample_i_r     <= sx_adc($signed(window_mem[window_rd_ptr][ADC_W-1:0]));
-                    sample_q_r     <= sx_adc($signed(window_mem[window_rd_ptr][PACKED_W-1:ADC_W]));
+                    // One shared sample stream fans out into all active lanes.
+                    // Each lane sees the same sample with a different delayed
+                    // coefficient so that window starts are staggered by +1.
+                    sample_i_r     <= sx_adc($signed(frame_rd_data[ADC_W-1:0]));
+                    sample_q_r     <= sx_adc($signed(frame_rd_data[PACKED_W-1:ADC_W]));
                     sample_step_r  <= feed_step;
                     sample_valid_r <= 1'b1;
-                    window_rd_ptr  <= win_next_idx(window_rd_ptr);
 
                     for (pi = 0; pi < PSS_COUNT; pi = pi + 1) begin
                         coef_pipe[pi][0] <= (feed_step < PSS_LEN) ? pss_rom_dout[pi] : '0;
@@ -465,10 +423,14 @@ module lte_phy_pss_corr #(
                         rom_ena <= 1'b0;
                     end
 
-                    if (feed_step == (SCAN_STEPS - 1)) begin
-                        sample_valid_r <= 1'b1;
-                        feed_step      <= '0;
-                        state          <= ST_WAIT;
+                    if ((feed_step + 2) < batch_scan_steps) begin
+                        frame_rd_en   <= 1'b1;
+                        frame_rd_addr <= batch_base_idx + feed_step + 2'd2;
+                    end
+
+                    if (feed_step == (batch_scan_steps - 1)) begin
+                        feed_step <= '0;
+                        state     <= ST_WAIT;
                     end else begin
                         feed_step <= feed_step + 1'b1;
                     end
@@ -478,17 +440,46 @@ module lte_phy_pss_corr #(
                     sample_valid_r <= 1'b0;
                     rom_ena        <= 1'b0;
 
-                    if (&lane_done) begin
-                        window_wr_ptr   <= window_head_ptr;
-                        window_head_ptr <= win_advance(window_head_ptr, K_LANES);
-                        window_count    <= PSS_LEN - 1;
-                        window_base_abs <= batch_base_abs + K_LANES;
-                        state           <= ST_FILL;
+                    if (batch_all_done) begin
+                        next_base_int = batch_base_idx + batch_active_lanes;
+
+                        if (next_base_int >= STARTS_PER_FRAME) begin
+                            if (frame_best_valid_n) begin
+                                o_pss_valid    <= 1'b1;
+                                o_pss_idx      <= frame_best_pss_n;
+                                o_shift        <= frame_best_shift_n;
+                                o_dbg_mag_pss0 <= frame_best_mag0_n[33:0];
+                                o_dbg_mag_pss1 <= frame_best_mag1_n[33:0];
+                                o_dbg_mag_pss2 <= frame_best_mag2_n[33:0];
+                            end
+
+                            state <= ST_CAPTURE;
+                        end else begin
+                            next_lanes_int = active_lanes_from(next_base_int);
+                            next_steps_int = scan_steps_from_lanes(next_lanes_int);
+
+                            batch_base_idx     <= next_base_int[START_W-1:0];
+                            batch_active_lanes <= next_lanes_int[LANE_W-1:0];
+                            batch_scan_steps   <= next_steps_int[STEP_W-1:0];
+                            feed_step          <= '0;
+                            lane_done          <= '0;
+
+                            for (pi = 0; pi < PSS_COUNT; pi = pi + 1) begin
+                                for (li = 0; li < K_LANES; li = li + 1)
+                                    coef_pipe[pi][li] <= '0;
+                            end
+
+                            frame_rd_en   <= 1'b1;
+                            frame_rd_addr <= next_base_int[FRAME_ADDR_W-1:0];
+                            rom_ena      <= 1'b1;
+                            rom_addr_cnt <= '0;
+                            state        <= ST_PRIME;
+                        end
                     end
                 end
 
                 default: begin
-                    state          <= ST_FILL;
+                    state          <= ST_CAPTURE;
                     sample_valid_r <= 1'b0;
                     rom_ena        <= 1'b0;
                 end

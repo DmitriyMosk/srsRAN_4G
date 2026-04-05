@@ -25,7 +25,9 @@ module mem_ring_buffer #(
     output wire [COUNT_W-1:0]   o_level
 );
 
-    (* ram_style = "auto" *) reg [WIDTH-1:0] mem [0:CAP-1];
+    // Xilinx-friendly simple dual-port RAM template:
+    // one write port, one read port, common clock, READ_FIRST behaviour.
+    (* ram_style = "block" *) reg [WIDTH-1:0] mem [0:CAP-1];
 
     reg [ADDR_W-1:0] wr_ptr;
     reg [ADDR_W-1:0] rd_ptr;
@@ -53,6 +55,11 @@ module mem_ring_buffer #(
     assign o_level  = level;
 
     always @(posedge i_clk) begin
+        if (!i_rst && wd_fire_i)
+            mem[wr_ptr] <= i_wd_data;
+    end
+
+    always @(posedge i_clk) begin
         if (i_rst) begin
             wr_ptr     <= '0;
             rd_ptr     <= '0;
@@ -62,9 +69,8 @@ module mem_ring_buffer #(
             o_wd_fire  <= 1'b0;
             o_rd_fire  <= 1'b0;
         end else begin
-            if (wd_fire_i)
-                mem[wr_ptr] <= i_wd_data;
-
+            // READ_FIRST: when read and write collide on the same address,
+            // return the previously stored sample and commit the new one after.
             if (rd_fire_i)
                 o_rd_data <= mem[rd_ptr];
 

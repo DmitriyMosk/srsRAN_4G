@@ -225,7 +225,9 @@ require_file_exists [file join $repo_root "coe" "pss_2_td_256.coe"]
 
 require_file_exists [file join $HDL_INC_PATH "lte_hw_params.vh"]
 require_file_exists [file join $HDL_SV_PATH  "lte_phy_sync.sv"]
+require_file_exists [file join $HDL_SV_PATH  "lte_phy_sync_k8_top.sv"]
 require_file_exists [file join $HDL_SV_PATH  "lte_phy_pss_corr.sv"]
+require_file_exists [file join $HDL_SV_PATH  "mem_frame_buffer.sv"]
 require_file_exists [file join $HDL_SV_PATH  "mem_ring_buffer.sv"]
 require_file_exists [file join $HDL_SV_PATH  "system_lte.sv"]
 require_file_exists [file join $HDL_V_PATH   "system_lte_bd.v"]
@@ -242,10 +244,12 @@ set inc_dirs [list \
 ]
 
 add_files -fileset sources_1 -norecurse [list                               \
+    [file join $HDL_SV_PATH "mem_frame_buffer.sv"]                          \
     [file join $HDL_INC_PATH "lte_hw_params.vh"]                            \
     [file join $HDL_SV_PATH "mem_ring_buffer.sv"]                           \
     [file join $HDL_SV_PATH "lte_phy_pss_corr.sv"]                          \
     [file join $HDL_SV_PATH "lte_phy_sync.sv"]                              \
+    [file join $HDL_SV_PATH "lte_phy_sync_k8_top.sv"]                       \
     [file join $HDL_SV_PATH "system_lte.sv"]                                \
     [file join $HDL_V_PATH  "system_lte_bd.v"]                              \
     [file join $HDL_SV_PATH "mem_sdpram_wrap.sv"]                           \
@@ -304,6 +308,7 @@ if {$RUN_TOP_SYNTH} {
     file mkdir $REPORTS_DIR
 
     run_top_synth_reports sources_1 lte_phy_pss_corr $REPORTS_DIR $ZEDBOARD_ZYNQ
+    run_top_synth_reports sources_1 lte_phy_sync_k8_top $REPORTS_DIR $ZEDBOARD_ZYNQ
     run_top_synth_reports sources_1 system_lte_bd $REPORTS_DIR $ZEDBOARD_ZYNQ
     run_top_synth_reports sources_1 system_lte    $REPORTS_DIR $ZEDBOARD_ZYNQ
 
