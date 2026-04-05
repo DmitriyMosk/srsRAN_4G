@@ -21,6 +21,7 @@ module system_lte_bd #(
     output wire signed [DATA_W - 1: 0]   o_data_i1,
     output wire signed [DATA_W - 1: 0]   o_data_q1,
     output wire                          o_data_valid_1,
+    output wire                          o_pss_valid,
 
     output wire [3:0]                    o_dbg_pss_idx,
     output wire [31:0]                   o_dbg_shift,
@@ -44,6 +45,7 @@ module system_lte_bd #(
         .o_data_i1(o_data_i1),
         .o_data_q1(o_data_q1),
         .o_data_valid_1(o_data_valid_1),
+        .o_pss_valid(o_pss_valid),
         .o_dbg_pss_idx(o_dbg_pss_idx),
         .o_dbg_shift(o_dbg_shift),
         .o_dbg_mag_pss0(o_dbg_mag_pss0),
