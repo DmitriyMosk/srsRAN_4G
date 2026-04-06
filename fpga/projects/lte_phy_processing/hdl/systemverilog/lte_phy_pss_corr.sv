@@ -45,14 +45,16 @@ module lte_phy_pss_corr #(
     // PRIME:   give the synchronous PSS ROM one cycle to produce tap 0.
     // STREAM:  walk a shared sample stream across K adjacent correlation lanes.
     // WAIT:    wait until every active lane returns its correlation result.
-    // MERGE:   register the best result of the finished batch into frame_best.
+    // MERGE:   register only the merge decision for this batch.
+    // COMMIT:  apply the registered decision to frame_best and launch next batch.
     // OUTPUT:  copy the frame winner into the visible debug/output bus.
     localparam [2:0] ST_CAPTURE = 3'd0;
     localparam [2:0] ST_PRIME   = 3'd1;
     localparam [2:0] ST_STREAM  = 3'd2;
     localparam [2:0] ST_WAIT    = 3'd3;
     localparam [2:0] ST_MERGE   = 3'd4;
-    localparam [2:0] ST_OUTPUT  = 3'd5;
+    localparam [2:0] ST_COMMIT  = 3'd5;
+    localparam [2:0] ST_OUTPUT  = 3'd6;
 
     function automatic signed [CORR_W-1:0] sx_adc(input signed [ADC_W-1:0] v);
         begin
@@ -141,6 +143,8 @@ module lte_phy_pss_corr #(
     reg [MAG_W-1:0]             batch_best_mag0;
     reg [MAG_W-1:0]             batch_best_mag1;
     reg [MAG_W-1:0]             batch_best_mag2;
+    reg                         merge_take_batch;
+    reg                         merge_final_batch;
     reg                         lane_result_valid [0:K_LANES-1];
     reg [MAG_W-1:0]             lane_result_mag   [0:K_LANES-1];
     reg [$clog2(PSS_COUNT)-1:0] lane_result_pss   [0:K_LANES-1];
@@ -350,6 +354,8 @@ module lte_phy_pss_corr #(
             batch_best_mag0   <= '0;
             batch_best_mag1   <= '0;
             batch_best_mag2   <= '0;
+            merge_take_batch <= 1'b0;
+            merge_final_batch<= 1'b0;
 
             for (pi = 0; pi < PSS_COUNT; pi = pi + 1) begin
                 for (li = 0; li < K_LANES; li = li + 1)
@@ -409,6 +415,8 @@ module lte_phy_pss_corr #(
                             batch_best_mag0    <= '0;
                             batch_best_mag1    <= '0;
                             batch_best_mag2    <= '0;
+                            merge_take_batch   <= 1'b0;
+                            merge_final_batch  <= 1'b0;
 
                             for (pi = 0; pi < PSS_COUNT; pi = pi + 1) begin
                                 for (li = 0; li < K_LANES; li = li + 1)
@@ -523,10 +531,20 @@ module lte_phy_pss_corr #(
                     sample_valid_r <= 1'b0;
                     rom_ena        <= 1'b0;
 
-                    if (batch_best_valid &&
-                        (!frame_best_valid ||
-                         (batch_best_mag > frame_best_mag) ||
-                         ((batch_best_mag == frame_best_mag) && (batch_best_shift < frame_best_shift)))) begin
+                    next_base_int = batch_base_idx + batch_active_lanes;
+                    merge_take_batch <= batch_best_valid &&
+                                        (!frame_best_valid ||
+                                         (batch_best_mag > frame_best_mag) ||
+                                         ((batch_best_mag == frame_best_mag) && (batch_best_shift < frame_best_shift)));
+                    merge_final_batch <= (next_base_int >= STARTS_PER_FRAME);
+                    state <= ST_COMMIT;
+                end
+
+                ST_COMMIT: begin
+                    sample_valid_r <= 1'b0;
+                    rom_ena        <= 1'b0;
+
+                    if (merge_take_batch) begin
                         frame_best_valid <= 1'b1;
                         frame_best_mag   <= batch_best_mag;
                         frame_best_pss   <= batch_best_pss;
@@ -537,7 +555,7 @@ module lte_phy_pss_corr #(
                     end
 
                     next_base_int = batch_base_idx + batch_active_lanes;
-                    if (next_base_int >= STARTS_PER_FRAME) begin
+                    if (merge_final_batch) begin
                         state <= ST_OUTPUT;
                     end else begin
                         next_lanes_int = active_lanes_from(next_base_int);
@@ -555,6 +573,8 @@ module lte_phy_pss_corr #(
                         batch_best_mag0    <= '0;
                         batch_best_mag1    <= '0;
                         batch_best_mag2    <= '0;
+                        merge_take_batch   <= 1'b0;
+                        merge_final_batch  <= 1'b0;
 
                         for (pi = 0; pi < PSS_COUNT; pi = pi + 1) begin
                             for (li = 0; li < K_LANES; li = li + 1)
@@ -572,6 +592,8 @@ module lte_phy_pss_corr #(
                 ST_OUTPUT: begin
                     sample_valid_r <= 1'b0;
                     rom_ena        <= 1'b0;
+                    merge_take_batch <= 1'b0;
+                    merge_final_batch<= 1'b0;
 
                     if (frame_best_valid) begin
                         o_pss_valid    <= 1'b1;

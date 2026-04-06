@@ -41,11 +41,11 @@ module math_complex_corr #(
 
     // фактически будет 1, если corr_seq_idx == CORR_SEQ_SIZE
     // сигнал для того, что значение mag можно использовать
-    output wire                     o_valid,
+    output reg                      o_valid,
 
     // мнимая и реальная часть корреляции
-    output wire signed [fma_acc_size - 1:0] o_im,
-    output wire signed [fma_acc_size - 1:0] o_re
+    output reg signed [fma_acc_size - 1:0] o_im,
+    output reg signed [fma_acc_size - 1:0] o_re
 );  
     // размер счётчика окна
     localparam int IDX_W = (CORR_SEQ_SIZE <= 1) ? 1 : $clog2(CORR_SEQ_SIZE);
@@ -108,7 +108,7 @@ module math_complex_corr #(
     end
 
     assign op_clr_mac   = op_last_it;
-    assign o_valid      = (
+    wire o_valid_w      = (
         (op_val_ii & op_val_qq) & 
         (op_val_iq & op_val_qi)
     );
@@ -150,7 +150,7 @@ module math_complex_corr #(
     );
 
     assign op_re = (
-        o_valid
+        o_valid_w
         ? ($signed(op_acc_ii) + $signed(op_acc_qq)) 
         : 0);
 
@@ -191,10 +191,21 @@ module math_complex_corr #(
     );
 
     assign op_im = (
-        o_valid
+        o_valid_w
         ? ($signed(op_acc_qi) - $signed(op_acc_iq))
         : 0);
 
-    assign o_re = op_re; 
-    assign o_im = op_im;
+    always @(posedge i_clk) begin
+        if (i_rst) begin
+            o_valid <= 1'b0;
+            o_re    <= '0;
+            o_im    <= '0;
+        end else begin
+            o_valid <= o_valid_w;
+            if (o_valid_w) begin
+                o_re <= op_re;
+                o_im <= op_im;
+            end
+        end
+    end
 endmodule
