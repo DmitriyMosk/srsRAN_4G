@@ -130,6 +130,13 @@ module lte_phy_pss_corr #(
     reg [MAG_W-1:0]             frame_best_mag0;
     reg [MAG_W-1:0]             frame_best_mag1;
     reg [MAG_W-1:0]             frame_best_mag2;
+    reg                         lane_result_valid [0:K_LANES-1];
+    reg [MAG_W-1:0]             lane_result_mag   [0:K_LANES-1];
+    reg [$clog2(PSS_COUNT)-1:0] lane_result_pss   [0:K_LANES-1];
+    reg [31:0]                  lane_result_shift [0:K_LANES-1];
+    reg [MAG_W-1:0]             lane_result_mag0  [0:K_LANES-1];
+    reg [MAG_W-1:0]             lane_result_mag1  [0:K_LANES-1];
+    reg [MAG_W-1:0]             lane_result_mag2  [0:K_LANES-1];
 
     wire [PACKED_W-1:0]         frame_wr_data = {i_data_q1, i_data_i1};
     wire                        frame_wr_en   = (state == ST_CAPTURE) && i_valid;
@@ -224,6 +231,54 @@ module lte_phy_pss_corr #(
         end
     endgenerate
 
+    generate
+        for (g_lane = 0; g_lane < K_LANES; g_lane = g_lane + 1) begin : gen_lane_result
+            wire                         lane_corr_valid_w;
+            wire [MAG_W-1:0]             lane_mag0_w;
+            wire [MAG_W-1:0]             lane_mag1_w;
+            wire [MAG_W-1:0]             lane_mag2_w;
+            wire [MAG_W-1:0]             lane_best_mag_w;
+            wire [$clog2(PSS_COUNT)-1:0] lane_best_pss_w;
+
+            assign lane_corr_valid_w = corr_v[0][g_lane] && corr_v[1][g_lane] && corr_v[2][g_lane];
+            assign lane_mag0_w = l1mag(corr_re[0][g_lane], corr_im[0][g_lane]);
+            assign lane_mag1_w = l1mag(corr_re[1][g_lane], corr_im[1][g_lane]);
+            assign lane_mag2_w = l1mag(corr_re[2][g_lane], corr_im[2][g_lane]);
+
+            assign lane_best_mag_w = ((lane_mag2_w >= lane_mag1_w) && (lane_mag2_w >= lane_mag0_w)) ? lane_mag2_w :
+                                     ((lane_mag1_w >= lane_mag0_w) ? lane_mag1_w : lane_mag0_w);
+            assign lane_best_pss_w = ((lane_mag2_w >= lane_mag1_w) && (lane_mag2_w >= lane_mag0_w)) ? 2 :
+                                     ((lane_mag1_w >= lane_mag0_w) ? 1 : 0);
+
+            // Cut the long DSP-to-reducer path: first register the complex
+            // correlation result, then register the per-lane winner, and only
+            // after that update the frame-global maximum in the control FSM.
+            always @(posedge i_clk) begin
+                if (corr_rst) begin
+                    lane_result_valid[g_lane] <= 1'b0;
+                    lane_result_mag[g_lane]   <= '0;
+                    lane_result_pss[g_lane]   <= '0;
+                    lane_result_shift[g_lane] <= '0;
+                    lane_result_mag0[g_lane]  <= '0;
+                    lane_result_mag1[g_lane]  <= '0;
+                    lane_result_mag2[g_lane]  <= '0;
+                end else if (lane_done[g_lane]) begin
+                    lane_result_valid[g_lane] <= 1'b0;
+                end else if ((g_lane < batch_active_lanes) &&
+                             !lane_result_valid[g_lane] &&
+                             lane_corr_valid_w) begin
+                    lane_result_valid[g_lane] <= 1'b1;
+                    lane_result_mag[g_lane]   <= lane_best_mag_w;
+                    lane_result_pss[g_lane]   <= lane_best_pss_w;
+                    lane_result_shift[g_lane] <= batch_base_idx + g_lane;
+                    lane_result_mag0[g_lane]  <= lane_mag0_w;
+                    lane_result_mag1[g_lane]  <= lane_mag1_w;
+                    lane_result_mag2[g_lane]  <= lane_mag2_w;
+                end
+            end
+        end
+    endgenerate
+
     assign o_sample_ready = (state == ST_CAPTURE);
     assign o_busy = (state != ST_CAPTURE);
 
@@ -239,12 +294,6 @@ module lte_phy_pss_corr #(
         reg [MAG_W-1:0]             frame_best_mag0_n;
         reg [MAG_W-1:0]             frame_best_mag1_n;
         reg [MAG_W-1:0]             frame_best_mag2_n;
-        reg [MAG_W-1:0]             mag0;
-        reg [MAG_W-1:0]             mag1;
-        reg [MAG_W-1:0]             mag2;
-        reg [MAG_W-1:0]             cand_mag;
-        reg [$clog2(PSS_COUNT)-1:0] cand_pss;
-        reg [31:0]                  cand_shift;
         reg                         batch_all_done;
         integer                     next_base_int;
         integer                     next_lanes_int;
@@ -312,39 +361,17 @@ module lte_phy_pss_corr #(
             for (li = 0; li < K_LANES; li = li + 1) begin
                 if ((li < batch_active_lanes) &&
                     !lane_done_n[li] &&
-                    corr_v[0][li] &&
-                    corr_v[1][li] &&
-                    corr_v[2][li]) begin
-
-                    mag0 = l1mag(corr_re[0][li], corr_im[0][li]);
-                    mag1 = l1mag(corr_re[1][li], corr_im[1][li]);
-                    mag2 = l1mag(corr_re[2][li], corr_im[2][li]);
-
-                    if ((mag2 >= mag1) && (mag2 >= mag0)) begin
-                        cand_mag = mag2;
-                        cand_pss = 2;
-                    end else if (mag1 >= mag0) begin
-                        cand_mag = mag1;
-                        cand_pss = 1;
-                    end else begin
-                        cand_mag = mag0;
-                        cand_pss = 0;
-                    end
-
-                    // The winner is always reported relative to the captured
-                    // subframe, not to any absolute stream index.
-                    cand_shift = batch_base_idx + li;
-
+                    lane_result_valid[li]) begin
                     if (!frame_best_valid_n ||
-                        (cand_mag > frame_best_mag_n) ||
-                        ((cand_mag == frame_best_mag_n) && (cand_shift < frame_best_shift_n))) begin
+                        (lane_result_mag[li] > frame_best_mag_n) ||
+                        ((lane_result_mag[li] == frame_best_mag_n) && (lane_result_shift[li] < frame_best_shift_n))) begin
                         frame_best_valid_n = 1'b1;
-                        frame_best_mag_n   = cand_mag;
-                        frame_best_pss_n   = cand_pss;
-                        frame_best_shift_n = cand_shift;
-                        frame_best_mag0_n  = mag0;
-                        frame_best_mag1_n  = mag1;
-                        frame_best_mag2_n  = mag2;
+                        frame_best_mag_n   = lane_result_mag[li];
+                        frame_best_pss_n   = lane_result_pss[li];
+                        frame_best_shift_n = lane_result_shift[li];
+                        frame_best_mag0_n  = lane_result_mag0[li];
+                        frame_best_mag1_n  = lane_result_mag1[li];
+                        frame_best_mag2_n  = lane_result_mag2[li];
                     end
 
                     lane_done_n[li] = 1'b1;
