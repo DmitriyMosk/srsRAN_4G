@@ -175,14 +175,18 @@ module lte_phy_pss_corr #(
         end
     endgenerate
 
-    wire signed [FMA_ACC_SIZE-1:0] corr_re [0:PSS_COUNT-1][0:K_LANES-1];
-    wire signed [FMA_ACC_SIZE-1:0] corr_im [0:PSS_COUNT-1][0:K_LANES-1];
-    wire                           corr_v  [0:PSS_COUNT-1][0:K_LANES-1];
+    reg signed [FMA_ACC_SIZE-1:0]  corr_re [0:PSS_COUNT-1][0:K_LANES-1];
+    reg signed [FMA_ACC_SIZE-1:0]  corr_im [0:PSS_COUNT-1][0:K_LANES-1];
+    reg                            corr_v  [0:PSS_COUNT-1][0:K_LANES-1];
 
     genvar g_pss;
     generate
         for (g_lane = 0; g_lane < K_LANES; g_lane = g_lane + 1) begin : gen_corr_lane
             for (g_pss = 0; g_pss < PSS_COUNT; g_pss = g_pss + 1) begin : gen_corr_pss
+                wire signed [FMA_ACC_SIZE-1:0] corr_re_w;
+                wire signed [FMA_ACC_SIZE-1:0] corr_im_w;
+                wire                           corr_v_w;
+
                 math_complex_corr #(
                     .WIDTH(CORR_W),
                     .CORR_SEQ_SIZE(PSS_LEN),
@@ -197,10 +201,25 @@ module lte_phy_pss_corr #(
                     .i_data_i2($signed(coef_pipe[g_pss][g_lane][15:0])),
                     .i_data_q2($signed(coef_pipe[g_pss][g_lane][31:16])),
                     .i_data2_valid(lane_valid[g_lane]),
-                    .o_valid(corr_v[g_pss][g_lane]),
-                    .o_im(corr_im[g_pss][g_lane]),
-                    .o_re(corr_re[g_pss][g_lane])
+                    .o_valid(corr_v_w),
+                    .o_im(corr_im_w),
+                    .o_re(corr_re_w)
                 );
+
+                // Register the correlator outputs locally so the long routes
+                // from DSP results into peak-selection logic are cut by one
+                // extra pipeline stage per lane/PSS branch.
+                always @(posedge i_clk) begin
+                    if (corr_rst) begin
+                        corr_v[g_pss][g_lane]  <= 1'b0;
+                        corr_re[g_pss][g_lane] <= '0;
+                        corr_im[g_pss][g_lane] <= '0;
+                    end else begin
+                        corr_v[g_pss][g_lane]  <= corr_v_w;
+                        corr_re[g_pss][g_lane] <= corr_re_w;
+                        corr_im[g_pss][g_lane] <= corr_im_w;
+                    end
+                end
             end
         end
     endgenerate
