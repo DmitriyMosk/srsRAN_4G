@@ -45,10 +45,14 @@ module lte_phy_pss_corr #(
     // PRIME:   give the synchronous PSS ROM one cycle to produce tap 0.
     // STREAM:  walk a shared sample stream across K adjacent correlation lanes.
     // WAIT:    wait until every active lane returns its correlation result.
-    localparam [1:0] ST_CAPTURE = 2'd0;
-    localparam [1:0] ST_PRIME   = 2'd1;
-    localparam [1:0] ST_STREAM  = 2'd2;
-    localparam [1:0] ST_WAIT    = 2'd3;
+    // MERGE:   register the best result of the finished batch into frame_best.
+    // OUTPUT:  copy the frame winner into the visible debug/output bus.
+    localparam [2:0] ST_CAPTURE = 3'd0;
+    localparam [2:0] ST_PRIME   = 3'd1;
+    localparam [2:0] ST_STREAM  = 3'd2;
+    localparam [2:0] ST_WAIT    = 3'd3;
+    localparam [2:0] ST_MERGE   = 3'd4;
+    localparam [2:0] ST_OUTPUT  = 3'd5;
 
     function automatic signed [CORR_W-1:0] sx_adc(input signed [ADC_W-1:0] v);
         begin
@@ -105,7 +109,7 @@ module lte_phy_pss_corr #(
             $fatal(1, "lte_phy_pss_corr: SUBFRAME_SPS must be >= PSS_LEN");
     end
 
-    reg [1:0]                   state;
+    reg [2:0]                   state;
     reg [FRAME_CNT_W-1:0]       capture_count;
     reg [START_W-1:0]           batch_base_idx;
     reg [LANE_W-1:0]            batch_active_lanes;
@@ -130,6 +134,13 @@ module lte_phy_pss_corr #(
     reg [MAG_W-1:0]             frame_best_mag0;
     reg [MAG_W-1:0]             frame_best_mag1;
     reg [MAG_W-1:0]             frame_best_mag2;
+    reg                         batch_best_valid;
+    reg [MAG_W-1:0]             batch_best_mag;
+    reg [$clog2(PSS_COUNT)-1:0] batch_best_pss;
+    reg [31:0]                  batch_best_shift;
+    reg [MAG_W-1:0]             batch_best_mag0;
+    reg [MAG_W-1:0]             batch_best_mag1;
+    reg [MAG_W-1:0]             batch_best_mag2;
     reg                         lane_result_valid [0:K_LANES-1];
     reg [MAG_W-1:0]             lane_result_mag   [0:K_LANES-1];
     reg [$clog2(PSS_COUNT)-1:0] lane_result_pss   [0:K_LANES-1];
@@ -262,8 +273,6 @@ module lte_phy_pss_corr #(
                     lane_result_mag0[g_lane]  <= '0;
                     lane_result_mag1[g_lane]  <= '0;
                     lane_result_mag2[g_lane]  <= '0;
-                end else if (lane_done[g_lane]) begin
-                    lane_result_valid[g_lane] <= 1'b0;
                 end else if ((g_lane < batch_active_lanes) &&
                              !lane_result_valid[g_lane] &&
                              lane_corr_valid_w) begin
@@ -287,13 +296,13 @@ module lte_phy_pss_corr #(
     always @(posedge i_clk) begin
         reg [K_LANES-1:0]           active_mask;
         reg [K_LANES-1:0]           lane_done_n;
-        reg                         frame_best_valid_n;
-        reg [MAG_W-1:0]             frame_best_mag_n;
-        reg [$clog2(PSS_COUNT)-1:0] frame_best_pss_n;
-        reg [31:0]                  frame_best_shift_n;
-        reg [MAG_W-1:0]             frame_best_mag0_n;
-        reg [MAG_W-1:0]             frame_best_mag1_n;
-        reg [MAG_W-1:0]             frame_best_mag2_n;
+        reg                         batch_best_valid_n;
+        reg [MAG_W-1:0]             batch_best_mag_n;
+        reg [$clog2(PSS_COUNT)-1:0] batch_best_pss_n;
+        reg [31:0]                  batch_best_shift_n;
+        reg [MAG_W-1:0]             batch_best_mag0_n;
+        reg [MAG_W-1:0]             batch_best_mag1_n;
+        reg [MAG_W-1:0]             batch_best_mag2_n;
         reg                         batch_all_done;
         integer                     next_base_int;
         integer                     next_lanes_int;
@@ -334,6 +343,13 @@ module lte_phy_pss_corr #(
             frame_best_mag0   <= '0;
             frame_best_mag1   <= '0;
             frame_best_mag2   <= '0;
+            batch_best_valid  <= 1'b0;
+            batch_best_mag    <= '0;
+            batch_best_pss    <= '0;
+            batch_best_shift  <= 32'd0;
+            batch_best_mag0   <= '0;
+            batch_best_mag1   <= '0;
+            batch_best_mag2   <= '0;
 
             for (pi = 0; pi < PSS_COUNT; pi = pi + 1) begin
                 for (li = 0; li < K_LANES; li = li + 1)
@@ -350,43 +366,17 @@ module lte_phy_pss_corr #(
             end
 
             lane_done_n        = lane_done;
-            frame_best_valid_n = frame_best_valid;
-            frame_best_mag_n   = frame_best_mag;
-            frame_best_pss_n   = frame_best_pss;
-            frame_best_shift_n = frame_best_shift;
-            frame_best_mag0_n  = frame_best_mag0;
-            frame_best_mag1_n  = frame_best_mag1;
-            frame_best_mag2_n  = frame_best_mag2;
 
             for (li = 0; li < K_LANES; li = li + 1) begin
                 if ((li < batch_active_lanes) &&
                     !lane_done_n[li] &&
                     lane_result_valid[li]) begin
-                    if (!frame_best_valid_n ||
-                        (lane_result_mag[li] > frame_best_mag_n) ||
-                        ((lane_result_mag[li] == frame_best_mag_n) && (lane_result_shift[li] < frame_best_shift_n))) begin
-                        frame_best_valid_n = 1'b1;
-                        frame_best_mag_n   = lane_result_mag[li];
-                        frame_best_pss_n   = lane_result_pss[li];
-                        frame_best_shift_n = lane_result_shift[li];
-                        frame_best_mag0_n  = lane_result_mag0[li];
-                        frame_best_mag1_n  = lane_result_mag1[li];
-                        frame_best_mag2_n  = lane_result_mag2[li];
-                    end
-
                     lane_done_n[li] = 1'b1;
                 end
             end
 
             batch_all_done = ((lane_done_n & active_mask) == active_mask) && (batch_active_lanes != 0);
 
-            frame_best_valid <= frame_best_valid_n;
-            frame_best_mag   <= frame_best_mag_n;
-            frame_best_pss   <= frame_best_pss_n;
-            frame_best_shift <= frame_best_shift_n;
-            frame_best_mag0  <= frame_best_mag0_n;
-            frame_best_mag1  <= frame_best_mag1_n;
-            frame_best_mag2  <= frame_best_mag2_n;
             lane_done        <= lane_done_n;
 
             case (state)
@@ -412,6 +402,13 @@ module lte_phy_pss_corr #(
                             frame_best_mag0    <= '0;
                             frame_best_mag1    <= '0;
                             frame_best_mag2    <= '0;
+                            batch_best_valid   <= 1'b0;
+                            batch_best_mag     <= '0;
+                            batch_best_pss     <= '0;
+                            batch_best_shift   <= 32'd0;
+                            batch_best_mag0    <= '0;
+                            batch_best_mag1    <= '0;
+                            batch_best_mag2    <= '0;
 
                             for (pi = 0; pi < PSS_COUNT; pi = pi + 1) begin
                                 for (li = 0; li < K_LANES; li = li + 1)
@@ -487,41 +484,105 @@ module lte_phy_pss_corr #(
                     rom_ena        <= 1'b0;
 
                     if (batch_all_done) begin
-                        next_base_int = batch_base_idx + batch_active_lanes;
+                        batch_best_valid_n = 1'b0;
+                        batch_best_mag_n   = '0;
+                        batch_best_pss_n   = '0;
+                        batch_best_shift_n = '0;
+                        batch_best_mag0_n  = '0;
+                        batch_best_mag1_n  = '0;
+                        batch_best_mag2_n  = '0;
 
-                        if (next_base_int >= STARTS_PER_FRAME) begin
-                            if (frame_best_valid_n) begin
-                                o_pss_valid    <= 1'b1;
-                                o_pss_idx      <= frame_best_pss_n;
-                                o_shift        <= frame_best_shift_n;
-                                o_dbg_mag_pss0 <= frame_best_mag0_n[33:0];
-                                o_dbg_mag_pss1 <= frame_best_mag1_n[33:0];
-                                o_dbg_mag_pss2 <= frame_best_mag2_n[33:0];
+                        for (li = 0; li < K_LANES; li = li + 1) begin
+                            if ((li < batch_active_lanes) && lane_result_valid[li]) begin
+                                if (!batch_best_valid_n ||
+                                    (lane_result_mag[li] > batch_best_mag_n) ||
+                                    ((lane_result_mag[li] == batch_best_mag_n) && (lane_result_shift[li] < batch_best_shift_n))) begin
+                                    batch_best_valid_n = 1'b1;
+                                    batch_best_mag_n   = lane_result_mag[li];
+                                    batch_best_pss_n   = lane_result_pss[li];
+                                    batch_best_shift_n = lane_result_shift[li];
+                                    batch_best_mag0_n  = lane_result_mag0[li];
+                                    batch_best_mag1_n  = lane_result_mag1[li];
+                                    batch_best_mag2_n  = lane_result_mag2[li];
+                                end
                             end
-
-                            state <= ST_CAPTURE;
-                        end else begin
-                            next_lanes_int = active_lanes_from(next_base_int);
-                            next_steps_int = scan_steps_from_lanes(next_lanes_int);
-
-                            batch_base_idx     <= next_base_int[START_W-1:0];
-                            batch_active_lanes <= next_lanes_int[LANE_W-1:0];
-                            batch_scan_steps   <= next_steps_int[STEP_W-1:0];
-                            feed_step          <= '0;
-                            lane_done          <= '0;
-
-                            for (pi = 0; pi < PSS_COUNT; pi = pi + 1) begin
-                                for (li = 0; li < K_LANES; li = li + 1)
-                                    coef_pipe[pi][li] <= '0;
-                            end
-
-                            frame_rd_en   <= 1'b1;
-                            frame_rd_addr <= next_base_int[FRAME_ADDR_W-1:0];
-                            rom_ena      <= 1'b1;
-                            rom_addr_cnt <= '0;
-                            state        <= ST_PRIME;
                         end
+
+                        batch_best_valid <= batch_best_valid_n;
+                        batch_best_mag   <= batch_best_mag_n;
+                        batch_best_pss   <= batch_best_pss_n;
+                        batch_best_shift <= batch_best_shift_n;
+                        batch_best_mag0  <= batch_best_mag0_n;
+                        batch_best_mag1  <= batch_best_mag1_n;
+                        batch_best_mag2  <= batch_best_mag2_n;
+                        state            <= ST_MERGE;
                     end
+                end
+
+                ST_MERGE: begin
+                    sample_valid_r <= 1'b0;
+                    rom_ena        <= 1'b0;
+
+                    if (batch_best_valid &&
+                        (!frame_best_valid ||
+                         (batch_best_mag > frame_best_mag) ||
+                         ((batch_best_mag == frame_best_mag) && (batch_best_shift < frame_best_shift)))) begin
+                        frame_best_valid <= 1'b1;
+                        frame_best_mag   <= batch_best_mag;
+                        frame_best_pss   <= batch_best_pss;
+                        frame_best_shift <= batch_best_shift;
+                        frame_best_mag0  <= batch_best_mag0;
+                        frame_best_mag1  <= batch_best_mag1;
+                        frame_best_mag2  <= batch_best_mag2;
+                    end
+
+                    next_base_int = batch_base_idx + batch_active_lanes;
+                    if (next_base_int >= STARTS_PER_FRAME) begin
+                        state <= ST_OUTPUT;
+                    end else begin
+                        next_lanes_int = active_lanes_from(next_base_int);
+                        next_steps_int = scan_steps_from_lanes(next_lanes_int);
+
+                        batch_base_idx     <= next_base_int[START_W-1:0];
+                        batch_active_lanes <= next_lanes_int[LANE_W-1:0];
+                        batch_scan_steps   <= next_steps_int[STEP_W-1:0];
+                        feed_step          <= '0;
+                        lane_done          <= '0;
+                        batch_best_valid   <= 1'b0;
+                        batch_best_mag     <= '0;
+                        batch_best_pss     <= '0;
+                        batch_best_shift   <= '0;
+                        batch_best_mag0    <= '0;
+                        batch_best_mag1    <= '0;
+                        batch_best_mag2    <= '0;
+
+                        for (pi = 0; pi < PSS_COUNT; pi = pi + 1) begin
+                            for (li = 0; li < K_LANES; li = li + 1)
+                                coef_pipe[pi][li] <= '0;
+                        end
+
+                        frame_rd_en   <= 1'b1;
+                        frame_rd_addr <= next_base_int[FRAME_ADDR_W-1:0];
+                        rom_ena       <= 1'b1;
+                        rom_addr_cnt  <= '0;
+                        state         <= ST_PRIME;
+                    end
+                end
+
+                ST_OUTPUT: begin
+                    sample_valid_r <= 1'b0;
+                    rom_ena        <= 1'b0;
+
+                    if (frame_best_valid) begin
+                        o_pss_valid    <= 1'b1;
+                        o_pss_idx      <= frame_best_pss;
+                        o_shift        <= frame_best_shift;
+                        o_dbg_mag_pss0 <= frame_best_mag0[33:0];
+                        o_dbg_mag_pss1 <= frame_best_mag1[33:0];
+                        o_dbg_mag_pss2 <= frame_best_mag2[33:0];
+                    end
+
+                    state <= ST_CAPTURE;
                 end
 
                 default: begin
