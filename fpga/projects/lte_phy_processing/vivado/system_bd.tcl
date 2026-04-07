@@ -421,7 +421,7 @@ if {$DO_PACKAGE} {
     set_property name         $IP_NAME                 $core
     set_property display_name "LTE PHY Processing"    $core
     set_property description  "LTE PHY processing IP" $core
-    set_property version      "1.3"                   $core
+    set_property version      "1.4"                   $core
 
     ipx::update_checksums $core
     ipx::save_core        $core

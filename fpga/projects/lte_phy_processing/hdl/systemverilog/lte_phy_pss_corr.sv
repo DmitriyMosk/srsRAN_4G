@@ -145,6 +145,11 @@ module lte_phy_pss_corr #(
     reg [MAG_W-1:0]             batch_best_mag2;
     reg                         merge_take_batch;
     reg                         merge_final_batch;
+    reg                         lane_mag_valid_s1 [0:K_LANES-1];
+    reg [MAG_W-1:0]             lane_mag0_s1      [0:K_LANES-1];
+    reg [MAG_W-1:0]             lane_mag1_s1      [0:K_LANES-1];
+    reg [MAG_W-1:0]             lane_mag2_s1      [0:K_LANES-1];
+    reg [31:0]                  lane_shift_s1     [0:K_LANES-1];
     reg                         lane_result_valid [0:K_LANES-1];
     reg [MAG_W-1:0]             lane_result_mag   [0:K_LANES-1];
     reg [$clog2(PSS_COUNT)-1:0] lane_result_pss   [0:K_LANES-1];
@@ -265,9 +270,30 @@ module lte_phy_pss_corr #(
             assign lane_best_pss_w = ((lane_mag2_w >= lane_mag1_w) && (lane_mag2_w >= lane_mag0_w)) ? 2 :
                                      ((lane_mag1_w >= lane_mag0_w) ? 1 : 0);
 
-            // Cut the long DSP-to-reducer path: first register the complex
-            // correlation result, then register the per-lane winner, and only
-            // after that update the frame-global maximum in the control FSM.
+            // Stage 1: register the three per-PSS magnitudes for this lane.
+            // This cuts the path reported in bad_timing1.csv:
+            // corr_im/corr_re -> abs/add/compare -> lane_result_*.
+            always @(posedge i_clk) begin
+                if (corr_rst) begin
+                    lane_mag_valid_s1[g_lane] <= 1'b0;
+                    lane_mag0_s1[g_lane]      <= '0;
+                    lane_mag1_s1[g_lane]      <= '0;
+                    lane_mag2_s1[g_lane]      <= '0;
+                    lane_shift_s1[g_lane]     <= 32'd0;
+                end else begin
+                    lane_mag_valid_s1[g_lane] <= 1'b0;
+                    if ((g_lane < batch_active_lanes) && lane_corr_valid_w) begin
+                        lane_mag_valid_s1[g_lane] <= 1'b1;
+                        lane_mag0_s1[g_lane]      <= lane_mag0_w;
+                        lane_mag1_s1[g_lane]      <= lane_mag1_w;
+                        lane_mag2_s1[g_lane]      <= lane_mag2_w;
+                        lane_shift_s1[g_lane]     <= batch_base_idx + g_lane;
+                    end
+                end
+            end
+
+            // Stage 2: select the best PSS inside the lane from already
+            // registered magnitudes, then register the final lane winner.
             always @(posedge i_clk) begin
                 if (corr_rst) begin
                     lane_result_valid[g_lane] <= 1'b0;
@@ -277,16 +303,19 @@ module lte_phy_pss_corr #(
                     lane_result_mag0[g_lane]  <= '0;
                     lane_result_mag1[g_lane]  <= '0;
                     lane_result_mag2[g_lane]  <= '0;
-                end else if ((g_lane < batch_active_lanes) &&
-                             !lane_result_valid[g_lane] &&
-                             lane_corr_valid_w) begin
+                end else if (!lane_result_valid[g_lane] &&
+                             lane_mag_valid_s1[g_lane]) begin
                     lane_result_valid[g_lane] <= 1'b1;
-                    lane_result_mag[g_lane]   <= lane_best_mag_w;
-                    lane_result_pss[g_lane]   <= lane_best_pss_w;
-                    lane_result_shift[g_lane] <= batch_base_idx + g_lane;
-                    lane_result_mag0[g_lane]  <= lane_mag0_w;
-                    lane_result_mag1[g_lane]  <= lane_mag1_w;
-                    lane_result_mag2[g_lane]  <= lane_mag2_w;
+                    lane_result_mag[g_lane]   <= ((lane_mag2_s1[g_lane] >= lane_mag1_s1[g_lane]) &&
+                                                  (lane_mag2_s1[g_lane] >= lane_mag0_s1[g_lane])) ? lane_mag2_s1[g_lane] :
+                                                 ((lane_mag1_s1[g_lane] >= lane_mag0_s1[g_lane]) ? lane_mag1_s1[g_lane] : lane_mag0_s1[g_lane]);
+                    lane_result_pss[g_lane]   <= ((lane_mag2_s1[g_lane] >= lane_mag1_s1[g_lane]) &&
+                                                  (lane_mag2_s1[g_lane] >= lane_mag0_s1[g_lane])) ? 2 :
+                                                 ((lane_mag1_s1[g_lane] >= lane_mag0_s1[g_lane]) ? 1 : 0);
+                    lane_result_shift[g_lane] <= lane_shift_s1[g_lane];
+                    lane_result_mag0[g_lane]  <= lane_mag0_s1[g_lane];
+                    lane_result_mag1[g_lane]  <= lane_mag1_s1[g_lane];
+                    lane_result_mag2[g_lane]  <= lane_mag2_s1[g_lane];
                 end
             end
         end
@@ -360,6 +389,13 @@ module lte_phy_pss_corr #(
             for (pi = 0; pi < PSS_COUNT; pi = pi + 1) begin
                 for (li = 0; li < K_LANES; li = li + 1)
                     coef_pipe[pi][li] <= '0;
+            end
+            for (li = 0; li < K_LANES; li = li + 1) begin
+                lane_mag_valid_s1[li] <= 1'b0;
+                lane_mag0_s1[li]      <= '0;
+                lane_mag1_s1[li]      <= '0;
+                lane_mag2_s1[li]      <= '0;
+                lane_shift_s1[li]     <= 32'd0;
             end
         end else begin
             o_pss_valid <= 1'b0;
