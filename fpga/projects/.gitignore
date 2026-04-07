@@ -2,3 +2,6 @@
 /scripts/**
 /v1/**
 /v2/**
+/v3/**
+*.drawio.bkp
+*.drawio.dtmp
