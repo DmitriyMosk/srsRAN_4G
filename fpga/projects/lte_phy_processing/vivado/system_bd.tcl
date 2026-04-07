@@ -5,7 +5,7 @@
 # package custom IP when DO_PACKAGE == 1
 # -----------------------------------------------------------------------------
 
-set DO_PACKAGE 0
+set DO_PACKAGE 1
 
 if {![info exists RUN_TOP_SYNTH]} {
     set RUN_TOP_SYNTH 0
@@ -273,17 +273,17 @@ set MEM_IP_XCI [list \
 ]
 
 set PSS_IP_XCI [list \
-    [file join "pss_0_rom_td_128sps" "pss_0_rom_td_128sps.xci"] \
-    [file join "pss_0_rom_td_256sps" "pss_0_rom_td_256sps.xci"] \
-    [file join "pss_1_rom_td_128sps" "pss_1_rom_td_128sps.xci"] \
-    [file join "pss_1_rom_td_256sps" "pss_1_rom_td_256sps.xci"] \
-    [file join "pss_2_rom_td_128sps" "pss_2_rom_td_128sps.xci"] \
-    [file join "pss_2_rom_td_256sps" "pss_2_rom_td_256sps.xci"] \
+    "pss_0_rom_td_128sps.xci" \
+    "pss_0_rom_td_256sps.xci" \
+    "pss_1_rom_td_128sps.xci" \
+    "pss_1_rom_td_256sps.xci" \
+    "pss_2_rom_td_128sps.xci" \
+    "pss_2_rom_td_256sps.xci" \
 ]
 
 set imported_ip_files [list]
 set imported_ip_files [concat $imported_ip_files [import_and_build_ip_list sources_1 $IP_PATH $MEM_IP_XCI $repo_root $PROJECT_DIR]]
-set imported_ip_files [concat $imported_ip_files [import_and_build_ip_list sources_1 $IP_PKG_SRC_PATH $PSS_IP_XCI $repo_root $PROJECT_DIR]]
+set imported_ip_files [concat $imported_ip_files [import_and_build_ip_list sources_1 $IP_PATH $PSS_IP_XCI $repo_root $PROJECT_DIR]]
 
 puts "INFO: COE refs before purge"
 report_project_coe_refs
