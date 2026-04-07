@@ -74,15 +74,15 @@ module system_lte_bd #(
 
     always @(posedge i_clk) begin
         if (i_rst) begin
-            o_data_i1       <= '0;
-            o_data_q1       <= '0;
+            o_data_i1       <= {DATA_W{1'b0}};
+            o_data_q1       <= {DATA_W{1'b0}};
             o_data_valid_1  <= 1'b0;
             o_pss_valid     <= 1'b0;
-            o_dbg_pss_idx   <= '0;
-            o_dbg_shift     <= '0;
-            o_dbg_mag_pss0  <= '0;
-            o_dbg_mag_pss1  <= '0;
-            o_dbg_mag_pss2  <= '0;
+            o_dbg_pss_idx   <= {$clog2(`LTE_PSS_COUNT){1'b0}};
+            o_dbg_shift     <= 32'd0;
+            o_dbg_mag_pss0  <= 34'd0;
+            o_dbg_mag_pss1  <= 34'd0;
+            o_dbg_mag_pss2  <= 34'd0;
         end else begin
             o_data_i1       <= core_data_i1;
             o_data_q1       <= core_data_q1;
