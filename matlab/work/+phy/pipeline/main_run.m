@@ -41,11 +41,11 @@ USE_SIGNAL_ID = "s1_6prb";
 
 % для сигнала будет в отдельном окне построено два графика
 % спектрограмма и график сигнала во временной области
-USE_SIGNAL_DRAW_SPECTROGRAM_AND_SIGNAL = true;
+USE_SIGNAL_DRAW_SPECTROGRAM_AND_SIGNAL = false;
 
 % длительность сигнала в ms 
 % 0 - использовать ВЕСЬ сигнал
-SET_SIGNAL_LENGTH_MS = 30;
+SET_SIGNAL_LENGTH_MS = 50;
 
 % принудительно использовать другой samplerate 
 % 0 - использоавть samplerate предусмотренный 3GPP
@@ -61,10 +61,10 @@ SET_FORCE_FFT_SIZE   = 0;
 % 6 - EXTENDED CP
 % начальное* - потому что на начало работы мы не знаем размер CP
 % это будет вычеслено далее в цепи обработки
-% в семплах это SET_INITIAL_OFDMA_SYMBOLS_PER_SLOT * FFT_SIZE 
+% в семплах это SET_INITIAL_OFDMA_SYMBOLS_PER_SLOT 
 SET_INITIAL_OFDMA_SYMBOLS_PER_SLOT = 7;
 
-% Расстрояние между поднесущими
+% Расстояние между поднесущими
 % Пока модель построена вокруг того, что это 15кГц
 % изменение приведёт к "неожиданным" эффектрам :)
 SET_OFDMA_SUBCARRIER_SPACE = 15e3; 
@@ -72,7 +72,7 @@ SET_OFDMA_SUBCARRIER_SPACE = 15e3;
 % Для AWGN шума.
 % В sigma. 
 % если задан 0, шума не будет
-SET_CHANNEL_AWGN_NOISE = 0;
+SET_CHANNEL_AWGN_NOISE = 0.0;
 % каждый следующий семпл будет зашумлён
 % на SET_CHANNEL_AWGN_INCREMENTIAL_NOISE, пока не достигнут максимум
 % SET_CHANNEL_AWGN_INCREMENTIAL_NOISE_RANGE, в этом случаее уменьшается на
@@ -88,7 +88,7 @@ SET_CHANNEL_EPA_DOPLER_SHIFT_HZ = 7;
 
 % Канал EVA
 % Включить/выключить канал EVA
-SET_CHANNEL_EVA_ENABLE = true; 
+SET_CHANNEL_EVA_ENABLE = false; 
 % Доплеровское смещение для EVA (максимальное)
 SET_CHANNEL_EVA_DOPLER_SHIFT_HZ = 30; 
 
@@ -103,6 +103,15 @@ SET_CHANNEL_DOPLER_OFFSET_HZ = 0;
 
 % Установка рязрядности АЦП в битах (часть модели)
 SET_ADC_BIT_DEPTH = 16;
+
+% Initial параметры базовой станции, далее будем использовать
+% это в декодировании и подборе метода демодуляции
+SET_ENB_STRUCT = struct( ...
+        'Ng', 'Sixth', ...
+        'PHICHDuration', 'Normal', ...
+        'DuplexMode', 'FDD', ...
+        'CyclicPrefix', 'Normal' ...
+    );
 
 % Загрузка семплов
 %%%%%%%%%%%%%%%%%%
