@@ -115,7 +115,6 @@ module lte_phy_pss_corr #(
     reg [FRAME_CNT_W-1:0]       capture_count;
     reg [START_W-1:0]           batch_base_idx;
     reg [LANE_W-1:0]            batch_active_lanes;
-    reg [STEP_W-1:0]            batch_scan_steps;
     reg [STEP_W-1:0]            feed_step;
     reg [K_LANES-1:0]           lane_done;
 
@@ -179,6 +178,7 @@ module lte_phy_pss_corr #(
 
     wire lane_valid [0:K_LANES-1];
     wire corr_rst = i_rst || (state == ST_CAPTURE) || (state == ST_PRIME);
+    wire [STEP_W-1:0] batch_scan_steps = scan_steps_from_lanes(batch_active_lanes);
 
     genvar g_lane;
     generate
@@ -339,16 +339,13 @@ module lte_phy_pss_corr #(
         reg                         batch_all_done;
         integer                     next_base_int;
         integer                     next_lanes_int;
-        integer                     next_steps_int;
         integer                     init_lanes_int;
-        integer                     init_steps_int;
 
         if (i_rst) begin
             state             <= ST_CAPTURE;
             capture_count     <= '0;
             batch_base_idx    <= '0;
             batch_active_lanes<= '0;
-            batch_scan_steps  <= '0;
             feed_step         <= '0;
             lane_done         <= '0;
 
@@ -422,12 +419,10 @@ module lte_phy_pss_corr #(
                     if (i_valid) begin
                         if (capture_count == (SUBFRAME_SPS - 1)) begin
                             init_lanes_int = active_lanes_from(0);
-                            init_steps_int = scan_steps_from_lanes(init_lanes_int);
 
                             capture_count      <= '0;
                             batch_base_idx     <= '0;
                             batch_active_lanes <= init_lanes_int[LANE_W-1:0];
-                            batch_scan_steps   <= init_steps_int[STEP_W-1:0];
                             feed_step          <= '0;
                             lane_done          <= '0;
                             frame_best_valid   <= 1'b0;
@@ -588,11 +583,9 @@ module lte_phy_pss_corr #(
                         state <= ST_OUTPUT;
                     end else begin
                         next_lanes_int = active_lanes_from(next_base_int);
-                        next_steps_int = scan_steps_from_lanes(next_lanes_int);
 
                         batch_base_idx     <= next_base_int[START_W-1:0];
                         batch_active_lanes <= next_lanes_int[LANE_W-1:0];
-                        batch_scan_steps   <= next_steps_int[STEP_W-1:0];
                         feed_step          <= '0;
                         lane_done          <= '0;
                         batch_best_valid   <= 1'b0;
