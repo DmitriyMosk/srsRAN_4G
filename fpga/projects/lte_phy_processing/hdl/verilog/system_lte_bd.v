@@ -24,19 +24,29 @@ module system_lte_bd #(
     input wire                           i_data_valid_i1,
     input wire                           i_data_valid_q1,
 
-    output wire signed [DATA_W - 1: 0]   o_data_i1,
-    output wire signed [DATA_W - 1: 0]   o_data_q1,
-    output wire                          o_data_valid_1,
-    output wire                          o_pss_valid,
+    output reg signed [DATA_W - 1: 0]    o_data_i1,
+    output reg signed [DATA_W - 1: 0]    o_data_q1,
+    output reg                           o_data_valid_1,
+    output reg                           o_pss_valid,
 
-    output wire [$clog2(`LTE_PSS_COUNT)-1:0] o_dbg_pss_idx,
-    output wire [31:0]                   o_dbg_shift,
+    output reg [$clog2(`LTE_PSS_COUNT)-1:0] o_dbg_pss_idx,
+    output reg [31:0]                    o_dbg_shift,
 
-    output wire  [33:0]                  o_dbg_mag_pss0,
-    output wire  [33:0]                  o_dbg_mag_pss1,
-    output wire  [33:0]                  o_dbg_mag_pss2
+    output reg [33:0]                    o_dbg_mag_pss0,
+    output reg [33:0]                    o_dbg_mag_pss1,
+    output reg [33:0]                    o_dbg_mag_pss2
 );
-    (* keep_hierarchy = "yes", dont_touch = "yes" *) system_lte #(
+    wire signed [DATA_W - 1: 0]          core_data_i1;
+    wire signed [DATA_W - 1: 0]          core_data_q1;
+    wire                                 core_data_valid_1;
+    wire                                 core_pss_valid;
+    wire [$clog2(`LTE_PSS_COUNT)-1:0]    core_dbg_pss_idx;
+    wire [31:0]                          core_dbg_shift;
+    wire [33:0]                          core_dbg_mag_pss0;
+    wire [33:0]                          core_dbg_mag_pss1;
+    wire [33:0]                          core_dbg_mag_pss2;
+
+    (* keep_hierarchy = "yes" *) system_lte #(
         .DATA_W(DATA_W), 
         .LTE_CORR_FS(LTE_CORR_FS), 
         .LTE_CORR_LANES(LTE_CORR_LANES),
@@ -51,14 +61,38 @@ module system_lte_bd #(
         .i_data_q1(i_data_q1),
         .i_data_valid_i1(i_data_valid_i1),
         .i_data_valid_q1(i_data_valid_q1),
-        .o_data_i1(o_data_i1),
-        .o_data_q1(o_data_q1),
-        .o_data_valid_1(o_data_valid_1),
-        .o_pss_valid(o_pss_valid),
-        .o_dbg_pss_idx(o_dbg_pss_idx),
-        .o_dbg_shift(o_dbg_shift),
-        .o_dbg_mag_pss0(o_dbg_mag_pss0),
-        .o_dbg_mag_pss1(o_dbg_mag_pss1),
-        .o_dbg_mag_pss2(o_dbg_mag_pss2)
+        .o_data_i1(core_data_i1),
+        .o_data_q1(core_data_q1),
+        .o_data_valid_1(core_data_valid_1),
+        .o_pss_valid(core_pss_valid),
+        .o_dbg_pss_idx(core_dbg_pss_idx),
+        .o_dbg_shift(core_dbg_shift),
+        .o_dbg_mag_pss0(core_dbg_mag_pss0),
+        .o_dbg_mag_pss1(core_dbg_mag_pss1),
+        .o_dbg_mag_pss2(core_dbg_mag_pss2)
     );
+
+    always @(posedge i_clk) begin
+        if (i_rst) begin
+            o_data_i1       <= '0;
+            o_data_q1       <= '0;
+            o_data_valid_1  <= 1'b0;
+            o_pss_valid     <= 1'b0;
+            o_dbg_pss_idx   <= '0;
+            o_dbg_shift     <= '0;
+            o_dbg_mag_pss0  <= '0;
+            o_dbg_mag_pss1  <= '0;
+            o_dbg_mag_pss2  <= '0;
+        end else begin
+            o_data_i1       <= core_data_i1;
+            o_data_q1       <= core_data_q1;
+            o_data_valid_1  <= core_data_valid_1;
+            o_pss_valid     <= core_pss_valid;
+            o_dbg_pss_idx   <= core_dbg_pss_idx;
+            o_dbg_shift     <= core_dbg_shift;
+            o_dbg_mag_pss0  <= core_dbg_mag_pss0;
+            o_dbg_mag_pss1  <= core_dbg_mag_pss1;
+            o_dbg_mag_pss2  <= core_dbg_mag_pss2;
+        end
+    end
 endmodule

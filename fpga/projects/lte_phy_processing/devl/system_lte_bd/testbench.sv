@@ -1,15 +1,29 @@
 `timescale 1ns/1ps
 `include "lte_hw_params.vh"
 
+// Define TB_ONECLOCK at compile time to run the wrapper at CLK_HZ = FS_HZ.
+// Default build is the normal two-clock style stress case.
+
 module tb_system_lte_bd;
-    parameter longint CLK_HZ            = 200_000_000;
+`ifdef TB_ONECLOCK
+    localparam bit      TB_ONECLOCK_MODE     = 1'b1;
+    localparam longint  TB_CLK_HZ            = 1_920_000;
+    localparam int      TB_EXPECT_DETECTIONS = 4;
+`else
+    localparam bit      TB_ONECLOCK_MODE     = 1'b0;
+    localparam longint  TB_CLK_HZ            = 200_000_000;
+    localparam int      TB_EXPECT_DETECTIONS = 4;
+`endif
+
+    parameter longint CLK_HZ            = TB_CLK_HZ;
     parameter longint FS_HZ             = 1_920_000;
     parameter int     SPEEDUP           = 1;
     parameter int     K_LANES           = 2;
     parameter int     PSS_TD_LEN        = 128;
     parameter int     SUBFRAME_SPS      = FS_HZ / 200;
     parameter int     BUF_CAP           = SUBFRAME_SPS;
-    parameter int     EXPECT_DETECTIONS = 4;
+    parameter int     EXPECT_DETECTIONS = TB_EXPECT_DETECTIONS;
+    parameter bit     ONECLOCK          = TB_ONECLOCK_MODE;
 
     localparam longint FS_EFF_HZ          = FS_HZ * SPEEDUP;
     localparam int     EXPECT_FIRST_SHIFT = 2193;
@@ -111,8 +125,8 @@ module tb_system_lte_bd;
             ce_div = 0;
         end
 
-        $display("TB system_lte_bd: CLK_HZ=%0d FS_HZ=%0d SPEEDUP=%0d FS_EFF_HZ=%0d K_LANES=%0d PSS_TD_LEN=%0d",
-                 CLK_HZ, FS_HZ, SPEEDUP, FS_EFF_HZ, K_LANES, PSS_TD_LEN);
+        $display("TB system_lte_bd: CLK_HZ=%0d FS_HZ=%0d SPEEDUP=%0d FS_EFF_HZ=%0d K_LANES=%0d PSS_TD_LEN=%0d ONECLOCK=%0d",
+                 CLK_HZ, FS_HZ, SPEEDUP, FS_EFF_HZ, K_LANES, PSS_TD_LEN, ONECLOCK);
     end
 
     always @(negedge clk) begin
@@ -218,20 +232,35 @@ module tb_system_lte_bd;
                      abs_detect_shift, o_data_valid_1,
                      o_dbg_mag_pss0, o_dbg_mag_pss1, o_dbg_mag_pss2);
 
-            if (o_dbg_pss_idx !== 1)
-                $fatal(1, "Expected PSS1 on detect #%0d, got PSS%0d", detect_count, o_dbg_pss_idx);
+            if (!ONECLOCK) begin
+                if (o_dbg_pss_idx !== 1)
+                    $fatal(1, "Expected PSS1 on detect #%0d, got PSS%0d", detect_count, o_dbg_pss_idx);
 
-            if (o_dbg_shift !== EXPECT_FIRST_SHIFT)
-                $fatal(1, "Expected rel_start0=%0d on detect #%0d, got rel_start0=%0d",
-                       EXPECT_FIRST_SHIFT, detect_count, o_dbg_shift);
+                if (o_dbg_shift !== EXPECT_FIRST_SHIFT)
+                    $fatal(1, "Expected rel_start0=%0d on detect #%0d, got rel_start0=%0d",
+                           EXPECT_FIRST_SHIFT, detect_count, o_dbg_shift);
 
-            if (abs_detect_shift !== abs_expected_shift)
-                $fatal(1, "Expected abs_start0=%0d on detect #%0d, got abs_start0=%0d",
-                       abs_expected_shift, detect_count, abs_detect_shift);
+                if (abs_detect_shift !== abs_expected_shift)
+                    $fatal(1, "Expected abs_start0=%0d on detect #%0d, got abs_start0=%0d",
+                           abs_expected_shift, detect_count, abs_detect_shift);
 
-            if (!(o_dbg_mag_pss1 >= o_dbg_mag_pss0 && o_dbg_mag_pss1 >= o_dbg_mag_pss2))
-                $fatal(1, "Peak bus disagrees with PSS1 selection: {%0d,%0d,%0d}",
-                       o_dbg_mag_pss0, o_dbg_mag_pss1, o_dbg_mag_pss2);
+                if (!(o_dbg_mag_pss1 >= o_dbg_mag_pss0 && o_dbg_mag_pss1 >= o_dbg_mag_pss2))
+                    $fatal(1, "Peak bus disagrees with PSS1 selection: {%0d,%0d,%0d}",
+                           o_dbg_mag_pss0, o_dbg_mag_pss1, o_dbg_mag_pss2);
+            end else begin
+                if (o_dbg_pss_idx !== 1)
+                    $fatal(1, "ONECLOCK: expected PSS1 on detect #%0d, got PSS%0d", detect_count, o_dbg_pss_idx);
+
+                if (detect_count == 0) begin
+                    if (abs_detect_shift !== EXPECT_FIRST_SHIFT)
+                        $fatal(1, "ONECLOCK: expected first absolute start0=%0d, got abs_start0=%0d",
+                               EXPECT_FIRST_SHIFT, abs_detect_shift);
+                end
+
+                if (!(o_dbg_mag_pss1 >= o_dbg_mag_pss0 && o_dbg_mag_pss1 >= o_dbg_mag_pss2))
+                    $fatal(1, "ONECLOCK: peak bus disagrees with PSS1 selection: {%0d,%0d,%0d}",
+                           o_dbg_mag_pss0, o_dbg_mag_pss1, o_dbg_mag_pss2);
+            end
 
             detect_count <= detect_count + 1;
             if ((detect_count + 1) == EXPECT_DETECTIONS) begin
