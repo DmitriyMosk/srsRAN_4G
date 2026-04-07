@@ -390,13 +390,6 @@ module lte_phy_pss_corr #(
                 for (li = 0; li < K_LANES; li = li + 1)
                     coef_pipe[pi][li] <= '0;
             end
-            for (li = 0; li < K_LANES; li = li + 1) begin
-                lane_mag_valid_s1[li] <= 1'b0;
-                lane_mag0_s1[li]      <= '0;
-                lane_mag1_s1[li]      <= '0;
-                lane_mag2_s1[li]      <= '0;
-                lane_shift_s1[li]     <= 32'd0;
-            end
         end else begin
             o_pss_valid <= 1'b0;
             frame_rd_en <= 1'b0;

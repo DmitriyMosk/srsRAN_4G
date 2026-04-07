@@ -14,11 +14,16 @@ module tb_system_lte_bd;
     localparam longint  TB_CLK_HZ            = 200_000_000;
     localparam int      TB_EXPECT_DETECTIONS = 4;
 `endif
+`ifdef TB_K8
+    localparam int      TB_K_LANES           = 8;
+`else
+    localparam int      TB_K_LANES           = 2;
+`endif
 
     parameter longint CLK_HZ            = TB_CLK_HZ;
     parameter longint FS_HZ             = 1_920_000;
     parameter int     SPEEDUP           = 1;
-    parameter int     K_LANES           = 2;
+    parameter int     K_LANES           = TB_K_LANES;
     parameter int     PSS_TD_LEN        = 128;
     parameter int     SUBFRAME_SPS      = FS_HZ / 200;
     parameter int     BUF_CAP           = SUBFRAME_SPS;
