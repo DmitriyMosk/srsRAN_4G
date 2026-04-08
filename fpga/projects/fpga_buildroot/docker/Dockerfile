@@ -43,6 +43,9 @@ RUN mkdir -p /run/sshd /workspace /home/dev/.ssh \
  && chown -R dev:dev /workspace /home/dev/.ssh \
  && chmod 700 /home/dev/.ssh
 
+COPY docker/prepare-kuiper-sysroot.sh /usr/local/bin/prepare-kuiper-sysroot
+RUN chmod +x /usr/local/bin/prepare-kuiper-sysroot
+
 RUN sed -ri 's/^#?PasswordAuthentication\s+.*/PasswordAuthentication yes/' /etc/ssh/sshd_config \
  && sed -ri 's/^#?PermitRootLogin\s+.*/PermitRootLogin no/' /etc/ssh/sshd_config \
  && sed -ri 's/^#?UsePAM\s+.*/UsePAM yes/' /etc/ssh/sshd_config \
