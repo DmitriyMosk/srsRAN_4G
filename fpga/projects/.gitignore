@@ -5,3 +5,6 @@
 /v3/**
 *.drawio.bkp
 *.drawio.dtmp
+fpga_buildroot/build
+fpga_buildroot/buildroot
+fpga_buildroot/kuiper-rootfs.tar

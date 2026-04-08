@@ -60,6 +60,7 @@ set(CMAKE_C_COMPILER   "${_SELECTED_C_COMPILER}"   CACHE FILEPATH "ARM cross C c
 set(CMAKE_CXX_COMPILER "${_SELECTED_CXX_COMPILER}" CACHE FILEPATH "ARM cross C++ compiler" FORCE)
 
 set(_SYSROOT_CANDIDATES
+    "/opt/kuiper-sysroot"
     "${FPGA_BUILDROOT_ROOT}/buildroot/sysroot"
     "${FPGA_BUILDROOT_ROOT}/buildroot/output/staging"
     "${FPGA_BUILDROOT_ROOT}/buildroot/output/host/arm-buildroot-linux-gnueabihf/sysroot"
@@ -75,31 +76,23 @@ foreach(_candidate IN LISTS _SYSROOT_CANDIDATES)
 endforeach()
 
 if(_SELECTED_SYSROOT)
-    set(CMAKE_SYSROOT "${_SELECTED_SYSROOT}" CACHE PATH "Target sysroot" FORCE)
+    set(FPGA_TARGET_SYSROOT "${_SELECTED_SYSROOT}" CACHE PATH "Target sysroot" FORCE)
 endif()
 
 set(_CUSTOM_PREFIX "${FPGA_BUILDROOT_ROOT}/buildroot/prefix")
 
 set(CMAKE_FIND_ROOT_PATH "")
-if(CMAKE_SYSROOT)
-    list(APPEND CMAKE_FIND_ROOT_PATH "${CMAKE_SYSROOT}")
+if(FPGA_TARGET_SYSROOT)
+    list(APPEND CMAKE_FIND_ROOT_PATH "${FPGA_TARGET_SYSROOT}")
 endif()
 if(EXISTS "${_CUSTOM_PREFIX}")
     list(APPEND CMAKE_FIND_ROOT_PATH "${_CUSTOM_PREFIX}")
 endif()
 
-if(CMAKE_SYSROOT)
-    set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
-    set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
-    set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
-    set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
-else()
-    # Fallback mode when only distro cross-toolchain is available.
-    set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
-    set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY BOTH)
-    set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE BOTH)
-    set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE BOTH)
-endif()
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY BOTH)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE BOTH)
+set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE BOTH)
 
 set(CMAKE_C_FLAGS_INIT   "-mcpu=cortex-a9 -mfpu=vfpv3 -mfloat-abi=hard")
 set(CMAKE_CXX_FLAGS_INIT "-mcpu=cortex-a9 -mfpu=vfpv3 -mfloat-abi=hard")
@@ -107,8 +100,8 @@ set(CMAKE_EXE_LINKER_FLAGS_INIT "")
 set(CMAKE_SHARED_LINKER_FLAGS_INIT "")
 
 # Help pkg-config resolve target packages without any command-line flags.
-if(CMAKE_SYSROOT)
-    set(ENV{PKG_CONFIG_SYSROOT_DIR} "${CMAKE_SYSROOT}")
+if(FPGA_TARGET_SYSROOT)
+    set(ENV{PKG_CONFIG_SYSROOT_DIR} "${FPGA_TARGET_SYSROOT}")
     set(ENV{PKG_CONFIG_DIR} "")
 endif()
 
@@ -116,12 +109,12 @@ set(_PKGCONFIG_DIRS "")
 foreach(_dir
     "${_CUSTOM_PREFIX}/lib/pkgconfig"
     "${_CUSTOM_PREFIX}/lib/arm-linux-gnueabihf/pkgconfig"
-    "${CMAKE_SYSROOT}/usr/lib/pkgconfig"
-    "${CMAKE_SYSROOT}/usr/lib/arm-linux-gnueabihf/pkgconfig"
-    "${CMAKE_SYSROOT}/usr/local/lib/pkgconfig"
-    "${CMAKE_SYSROOT}/usr/local/lib/arm-linux-gnueabihf/pkgconfig"
-    "${CMAKE_SYSROOT}/usr/share/pkgconfig"
-    "${CMAKE_SYSROOT}/usr/local/share/pkgconfig"
+    "${FPGA_TARGET_SYSROOT}/usr/lib/pkgconfig"
+    "${FPGA_TARGET_SYSROOT}/usr/lib/arm-linux-gnueabihf/pkgconfig"
+    "${FPGA_TARGET_SYSROOT}/usr/local/lib/pkgconfig"
+    "${FPGA_TARGET_SYSROOT}/usr/local/lib/arm-linux-gnueabihf/pkgconfig"
+    "${FPGA_TARGET_SYSROOT}/usr/share/pkgconfig"
+    "${FPGA_TARGET_SYSROOT}/usr/local/share/pkgconfig"
 )
     if(_dir AND EXISTS "${_dir}")
         list(APPEND _PKGCONFIG_DIRS "${_dir}")
@@ -136,8 +129,8 @@ endif()
 message(STATUS "FPGA_BUILDROOT_ROOT   = ${FPGA_BUILDROOT_ROOT}")
 message(STATUS "C compiler            = ${CMAKE_C_COMPILER}")
 message(STATUS "C++ compiler          = ${CMAKE_CXX_COMPILER}")
-if(CMAKE_SYSROOT)
-    message(STATUS "Target sysroot        = ${CMAKE_SYSROOT}")
+if(FPGA_TARGET_SYSROOT)
+    message(STATUS "Target sysroot        = ${FPGA_TARGET_SYSROOT}")
 else()
     message(WARNING "Target sysroot not found. Falling back to toolchain default system paths.")
 endif()
