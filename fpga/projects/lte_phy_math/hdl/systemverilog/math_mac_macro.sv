@@ -76,6 +76,9 @@ module math_mac_macro #(
     reg signed [ACC_WIDTH-1:0] op_acc_r;
     reg signed [ACC_WIDTH-1:0] op_acc_snap_r;
     reg                        op_acc_valid;
+    (* use_dsp = "yes" *) reg signed [MUL_WIDTH-1:0] mul_r;
+    reg                        mul_valid_r;
+    reg                        mul_clr_r;
 
     // pending snapshot after last MAC
     reg                        clr_pending;
@@ -85,12 +88,26 @@ module math_mac_macro #(
     wire signed [MUL_WIDTH-1:0] mul_w =
         $signed(pipe_a[PIPE-1]) * $signed(pipe_b[PIPE-1]);
 
-    wire signed [ACC_WIDTH-1:0] mul_ext_w =
-        {{(ACC_WIDTH-MUL_WIDTH){mul_w[MUL_WIDTH-1]}}, mul_w};
+    // Keep a local register on the raw multiplier output so Vivado can map it
+    // to the DSP MREG stage instead of spilling the product into fabric.
+    always @(posedge i_clk) begin
+        if (i_rst) begin
+            mul_r       <= '0;
+            mul_valid_r <= 1'b0;
+            mul_clr_r   <= 1'b0;
+        end else begin
+            mul_r       <= mul_w;
+            mul_valid_r <= s_pipe_end;
+            mul_clr_r   <= (s_pipe_end ? i_clr : 1'b0);
+        end
+    end
+
+    wire signed [ACC_WIDTH-1:0] mul_ext_r =
+        {{(ACC_WIDTH-MUL_WIDTH){mul_r[MUL_WIDTH-1]}}, mul_r};
 
     // Ключевая форма для DSP inference
     wire signed [ACC_WIDTH-1:0] mac_next_w =
-        $signed(op_acc_r) + $signed(mul_ext_w);
+        $signed(op_acc_r) + $signed(mul_ext_r);
 
     always @(posedge i_clk) begin
         if (i_rst) begin
@@ -108,21 +125,21 @@ module math_mac_macro #(
                 op_acc_snap_r <= op_acc_r;
                 op_acc_valid  <= 1'b1;
 
-                if (s_pipe_end) begin
+                if (mul_valid_r) begin
                     // первый элемент следующего окна не теряем
-                    op_acc_r <= mul_ext_w;
+                    op_acc_r <= mul_ext_r;
 
                     // на случай back-to-back окон длиной 1
-                    clr_pending <= i_clr;
+                    clr_pending <= mul_clr_r;
                 end else begin
                     op_acc_r    <= '0;
                     clr_pending <= 1'b0;
                 end
             end
             // Обычный MAC-такт
-            else if (s_pipe_end) begin
+            else if (mul_valid_r) begin
                 op_acc_r <= mac_next_w;
-                clr_pending <= i_clr;
+                clr_pending <= mul_clr_r;
             end
         end
     end
